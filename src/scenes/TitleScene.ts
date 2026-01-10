@@ -1,17 +1,21 @@
-import { Engine } from "@babylonjs/core/Engines/engine";
-import { Scene } from "@babylonjs/core/scene";
-import { ArcRotateCamera } from "@babylonjs/core/Cameras/arcRotateCamera";
-import { Vector3 } from "@babylonjs/core/Maths/math.vector";
-import { HemisphericLight } from "@babylonjs/core/Lights/hemisphericLight";
-import { MeshBuilder } from "@babylonjs/core/Meshes/meshBuilder";
-import { StandardMaterial } from "@babylonjs/core/Materials/standardMaterial";
-import { Color3 } from "@babylonjs/core/Maths/math.color";
-import { AdvancedDynamicTexture } from "@babylonjs/gui/2D/advancedDynamicTexture";
-import { TextBlock } from "@babylonjs/gui/2D/controls/textBlock";
-import { Button } from "@babylonjs/gui/2D/controls/button";
-import { StackPanel } from "@babylonjs/gui/2D/controls/stackPanel";
+import {
+  Engine,
+  Scene,
+  ArcRotateCamera,
+  Vector3,
+  HemisphericLight,
+  MeshBuilder,
+  StandardMaterial,
+  Color3,
+} from "@babylonjs/core";
+import { AdvancedDynamicTexture, TextBlock, Button, StackPanel } from "@babylonjs/gui";
+import type { SceneName } from "../main";
 
-export function createTitleScene(engine: Engine, _canvas: HTMLCanvasElement): Scene {
+export function createTitleScene(
+  engine: Engine,
+  _canvas: HTMLCanvasElement,
+  navigateTo: (scene: SceneName) => void
+): Scene {
   const scene = new Scene(engine);
 
   // Camera - isometric-ish view of a sample grid
@@ -54,7 +58,7 @@ export function createTitleScene(engine: Engine, _canvas: HTMLCanvasElement): Sc
   const gui = AdvancedDynamicTexture.CreateFullscreenUI("UI");
 
   const panel = new StackPanel();
-  panel.width = "300px";
+  panel.width = "400px";
   panel.horizontalAlignment = StackPanel.HORIZONTAL_ALIGNMENT_CENTER;
   panel.verticalAlignment = StackPanel.VERTICAL_ALIGNMENT_CENTER;
   gui.addControl(panel);
@@ -64,6 +68,7 @@ export function createTitleScene(engine: Engine, _canvas: HTMLCanvasElement): Sc
   title.color = "white";
   title.fontSize = 48;
   title.height = "80px";
+  title.resizeToFit = true;
   panel.addControl(title);
 
   const subtitle = new TextBlock();
@@ -80,7 +85,7 @@ export function createTitleScene(engine: Engine, _canvas: HTMLCanvasElement): Sc
   playButton.background = "#444444";
   playButton.cornerRadius = 5;
   playButton.onPointerClickObservable.add(() => {
-    console.log("Play clicked - will navigate to loadout screen");
+    navigateTo("battle");
   });
   panel.addControl(playButton);
 

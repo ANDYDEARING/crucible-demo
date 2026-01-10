@@ -28,7 +28,7 @@ A tactical RPG prototype inspired by Final Fantasy Tactics, Front Mission, and W
 ### Core Features (Prototype)
 
 - [ ] Isometric 3D grid that can rotate (90° increments like FFT)
-- [ ] Turn-based tactical combat
+- [ ] Turn-based tactical combat (3v3)
 - [ ] No character growth/progression (prototype limitation)
 - [ ] Multiplayer from day one (2 players)
 - [ ] Save/load/share loadouts between players
@@ -42,12 +42,29 @@ Players build teams before battle. This is a core engagement loop, not just a me
 - Loadouts can be shared (URL or code)
 - Inspiration: CCG deckbuilding, Warhammer army lists
 
-### Combat System (Initial)
+### Combat System
 
-- Grid-based movement
-- Turn-based (player alternates or unit-by-unit TBD)
-- Height matters (terrain elevation)
-- Facing may matter (flanking bonuses TBD)
+**Turn Structure:**
+- Prototype: Fixed alternating turns (I go, you go)
+- Future: Speed stat determines turn order, shown in UI widget on left side
+
+**Win Condition:**
+- Eliminate all enemy units
+
+**Grid:**
+- Larger grid (size TBD, needs to accommodate 3v3 with room to maneuver)
+- Height/terrain elevation matters
+- Camera should prevent viewing underside of map (future polish)
+
+**Unit Types (3 for prototype):**
+1. **Tank** - High HP, low damage, protects allies
+2. **Damage** - High damage, fragile
+3. **Support** - Healing/buffs, utility
+
+### Camera Constraints (Future)
+
+- Limit camera angle to prevent seeing under the map
+- 90° rotation increments for clarity
 
 ## Non-Goals (Prototype)
 
@@ -59,7 +76,8 @@ Players build teams before battle. This is a core engagement loop, not just a me
 
 ## Open Questions
 
-1. Turn structure: Full team moves, or alternating unit activations?
+1. ~~Turn structure: Full team moves, or alternating unit activations?~~ **Decided: I go, you go (speed-based later)**
 2. How are matches made? Lobby? Direct invite?
-3. What's the win condition? Eliminate all units? Objectives?
-4. Unit variety: How many unit types for prototype?
+3. ~~What's the win condition? Eliminate all units? Objectives?~~ **Decided: Eliminate all enemy units**
+4. ~~Unit variety: How many unit types for prototype?~~ **Decided: 3 types (tank, damage, support), 3v3**
+5. Grid size? (needs to fit 6 units with tactical space)
