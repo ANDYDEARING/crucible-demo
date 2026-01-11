@@ -30,19 +30,11 @@ export function createStartScene(
   clickArea.isPointerBlocker = true;
   gui.addControl(clickArea);
 
-  const title = new TextBlock();
-  title.text = "TACTICAL RPG";
-  title.color = "white";
-  title.fontSize = 56;
-  title.top = "-10%";
-  title.isHitTestVisible = false;
-  gui.addControl(title);
-
   const prompt = new TextBlock();
-  prompt.text = "Click anywhere to start";
-  prompt.color = "#888888";
-  prompt.fontSize = 24;
-  prompt.top = "10%";
+  prompt.text = "Click to Begin";
+  prompt.color = "white";
+  prompt.fontFamily = "'Exo 2', sans-serif";
+  prompt.fontSize = 48;
   prompt.isHitTestVisible = false;
   gui.addControl(prompt);
 

@@ -44,6 +44,11 @@ interface Unit {
   hasMoved: boolean;
   hasAttacked: boolean;
   originalColor: Color3;
+  // Initiative system
+  speed: number;
+  speedBonus: number;  // Bonus from skipping, consumed after next turn
+  accumulator: number; // Builds up until >= 10, then unit acts
+  loadoutIndex: number; // Original position in loadout for tie-breaking
 }
 
 export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, loadout: Loadout | null): Scene {
@@ -157,13 +162,13 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
   // Spawn player units
   for (let i = 0; i < playerUnits.length; i++) {
     const pos = playerPositions[i];
-    units.push(createUnit(playerUnits[i], "player", pos.x, pos.z, scene, unitMaterials, gridOffset, gui));
+    units.push(createUnit(playerUnits[i], "player", pos.x, pos.z, scene, unitMaterials, gridOffset, gui, i));
   }
 
   // Spawn enemy units
   for (let i = 0; i < enemyUnits.length; i++) {
     const pos = enemyPositions[i];
-    units.push(createUnit(enemyUnits[i], "enemy", pos.x, pos.z, scene, unitMaterials, gridOffset, gui));
+    units.push(createUnit(enemyUnits[i], "enemy", pos.x, pos.z, scene, unitMaterials, gridOffset, gui, i));
   }
 
   // Game state
@@ -172,7 +177,138 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
   let attackableUnits: Unit[] = [];
   let healableUnits: Unit[] = [];
   let gameOver = false;
-  let currentTeam: Team = "player";
+
+  // Initiative system
+  let currentUnit: Unit | null = null;
+  let lastActingTeam: Team | null = null;
+  let isFirstRound = true;
+  let firstRoundQueue: Unit[] = [];
+  const ACCUMULATOR_THRESHOLD = 10;
+
+  function getEffectiveSpeed(unit: Unit): number {
+    return unit.speed + unit.speedBonus;
+  }
+
+  function buildFirstRoundQueue(): void {
+    // Alternate teams: P1, P2, P1, P2, P1, P2
+    // Within team, use loadout order
+    const playerUnits = units.filter(u => u.team === "player").sort((a, b) => a.loadoutIndex - b.loadoutIndex);
+    const enemyUnits = units.filter(u => u.team === "enemy").sort((a, b) => a.loadoutIndex - b.loadoutIndex);
+
+    firstRoundQueue = [];
+    const maxLen = Math.max(playerUnits.length, enemyUnits.length);
+    for (let i = 0; i < maxLen; i++) {
+      if (playerUnits[i]) firstRoundQueue.push(playerUnits[i]);
+      if (enemyUnits[i]) firstRoundQueue.push(enemyUnits[i]);
+    }
+  }
+
+  function getNextUnitByAccumulator(): Unit | null {
+    // Add speed to all accumulators until someone hits threshold
+    let readyUnits: Unit[] = [];
+
+    // Keep ticking until at least one unit is ready
+    while (readyUnits.length === 0 && units.length > 0) {
+      for (const unit of units) {
+        unit.accumulator += getEffectiveSpeed(unit);
+        if (unit.accumulator >= ACCUMULATOR_THRESHOLD) {
+          readyUnits.push(unit);
+        }
+      }
+    }
+
+    if (readyUnits.length === 0) return null;
+
+    // Sort ready units by tie-breakers
+    readyUnits.sort((a, b) => {
+      // Primary: team that didn't just go
+      if (lastActingTeam !== null) {
+        if (a.team !== lastActingTeam && b.team === lastActingTeam) return -1;
+        if (b.team !== lastActingTeam && a.team === lastActingTeam) return 1;
+      }
+      // Secondary: loadout index
+      return a.loadoutIndex - b.loadoutIndex;
+    });
+
+    return readyUnits[0];
+  }
+
+  function getNextUnit(): Unit | null {
+    if (isFirstRound && firstRoundQueue.length > 0) {
+      return firstRoundQueue.shift() ?? null;
+    }
+
+    // After first round, use accumulator system
+    if (isFirstRound) {
+      isFirstRound = false;
+      // Reset all accumulators for the new system
+      for (const unit of units) {
+        unit.accumulator = 0;
+      }
+    }
+
+    return getNextUnitByAccumulator();
+  }
+
+  function startUnitTurn(unit: Unit): void {
+    currentUnit = unit;
+    unit.hasMoved = false;
+    unit.hasAttacked = false;
+
+    // Reset accumulator after acting
+    unit.accumulator = 0;
+
+    // Dim all units that aren't the active one
+    for (const u of units) {
+      if (u === unit) {
+        resetUnitAppearance(u);
+      } else {
+        setUnitInactive(u);
+      }
+    }
+
+    updateTurnIndicator();
+  }
+
+  function endCurrentUnitTurn(): void {
+    const unit = currentUnit;
+    if (!unit) return;
+
+    // Calculate speed bonus for next turn only
+    // Skip move = +0.5, skip action = +0.5, max +1
+    let bonus = 0;
+    if (!unit.hasMoved) bonus += 0.5;
+    if (!unit.hasAttacked) bonus += 0.5;
+    unit.speedBonus = bonus;
+
+    // Mark as exhausted visually
+    setUnitExhausted(unit);
+
+    lastActingTeam = unit.team;
+    clearHighlights();
+    selectedUnit = null;
+    currentUnit = null;
+
+    // Get next unit
+    const nextUnit = getNextUnit();
+    if (nextUnit) {
+      // Consume the speed bonus from previous turn (it only lasts one turn)
+      // The bonus was already used in accumulator calculation, now clear it
+      // Actually, we set it above for NEXT turn, so we consume it BEFORE their turn
+      startUnitTurn(nextUnit);
+      // After starting turn, clear the bonus (it was used for this turn's accumulation)
+      nextUnit.speedBonus = 0;
+    }
+  }
+
+  function startGame(): void {
+    buildFirstRoundQueue();
+    const firstUnit = getNextUnit();
+    if (firstUnit) {
+      startUnitTurn(firstUnit);
+      firstUnit.speedBonus = 0; // Clear any initial bonus
+    }
+  }
 
   function getDefaultTileMaterial(x: number, z: number): StandardMaterial {
     return (x + z) % 2 === 0 ? tileMaterialLight : tileMaterialDark;
@@ -267,7 +403,7 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
   }
 
   function setUnitExhausted(unit: Unit): void {
-    // Desaturate the unit mesh
+    // Fully desaturate the unit mesh (already acted)
     const mat = unit.mesh.material as StandardMaterial;
     const gray = (unit.originalColor.r + unit.originalColor.g + unit.originalColor.b) / 3;
     mat.diffuseColor = new Color3(gray * 0.5, gray * 0.5, gray * 0.5);
@@ -276,6 +412,29 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
     const baseMat = unit.baseMesh.material as StandardMaterial;
     baseMat.diffuseColor = baseMat.diffuseColor.scale(0.4);
     baseMat.emissiveColor = new Color3(0, 0, 0);
+  }
+
+  function setUnitInactive(unit: Unit): void {
+    // Partially desaturate - not their turn yet
+    const mat = unit.mesh.material as StandardMaterial;
+    const orig = unit.originalColor;
+    const gray = (orig.r + orig.g + orig.b) / 3;
+    // Blend 50% toward gray
+    mat.diffuseColor = new Color3(
+      orig.r * 0.5 + gray * 0.5,
+      orig.g * 0.5 + gray * 0.5,
+      orig.b * 0.5 + gray * 0.5
+    ).scale(0.6);
+
+    // Dim the base partially
+    const baseMat = unit.baseMesh.material as StandardMaterial;
+    if (unit.team === "player") {
+      baseMat.diffuseColor = new Color3(0.15, 0.3, 0.6);
+      baseMat.emissiveColor = new Color3(0.05, 0.1, 0.2);
+    } else {
+      baseMat.diffuseColor = new Color3(0.6, 0.3, 0.15);
+      baseMat.emissiveColor = new Color3(0.2, 0.1, 0.05);
+    }
   }
 
   function resetUnitAppearance(unit: Unit): void {
@@ -309,8 +468,17 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
       defender.baseMesh.dispose();
       if (defender.hpBar) defender.hpBar.dispose();
       if (defender.hpBarBg) defender.hpBarBg.dispose();
+
+      // Remove from units array
       const index = units.indexOf(defender);
       if (index > -1) units.splice(index, 1);
+
+      // Remove from first round queue if still in first round
+      const queueIndex = firstRoundQueue.indexOf(defender);
+      if (queueIndex > -1) {
+        firstRoundQueue.splice(queueIndex, 1);
+      }
+
       checkWinCondition();
     }
   }
@@ -366,31 +534,23 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
   }
 
   function endTurn(): void {
-    clearHighlights();
-    selectedUnit = null;
-
-    // Reset all units for the current team
-    for (const unit of units) {
-      unit.hasMoved = false;
-      unit.hasAttacked = false;
-      resetUnitAppearance(unit);
-    }
-
-    // Switch teams
-    currentTeam = currentTeam === "player" ? "enemy" : "player";
-    updateTurnIndicator();
+    endCurrentUnitTurn();
   }
 
   function updateTurnIndicator(): void {
-    const teamName = currentTeam === "player" ? "Player 1" : "Player 2";
-    const teamColor = currentTeam === "player" ? "#4488ff" : "#ff8844";
-    turnText.text = `${teamName}'s Turn`;
+    if (!currentUnit) return;
+
+    const teamName = currentUnit.team === "player" ? "Player 1" : "Player 2";
+    const teamColor = currentUnit.team === "player" ? "#4488ff" : "#ff8844";
+    const unitName = currentUnit.type.charAt(0).toUpperCase() + currentUnit.type.slice(1);
+    const speedInfo = `(Spd: ${getEffectiveSpeed(currentUnit).toFixed(1)})`;
+    turnText.text = `${teamName}'s ${unitName} ${speedInfo}`;
     turnText.color = teamColor;
   }
 
   function canSelectUnit(unit: Unit): boolean {
-    // Must be current team and not exhausted (attacked)
-    return unit.team === currentTeam && !unit.hasAttacked;
+    // Can only select the current unit whose turn it is
+    return unit === currentUnit;
   }
 
   // Click handling
@@ -515,6 +675,9 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
   });
   gui.addControl(rotateRightBtn);
 
+  // Initialize the game
+  startGame();
+
   return scene;
 }
 
@@ -532,7 +695,8 @@ function createUnit(
   scene: Scene,
   materials: Record<string, StandardMaterial>,
   gridOffset: number,
-  gui: AdvancedDynamicTexture
+  gui: AdvancedDynamicTexture,
+  loadoutIndex: number
 ): Unit {
   const stats = UNIT_STATS[type];
   const sizes = {
@@ -619,6 +783,10 @@ function createUnit(
     hasMoved: false,
     hasAttacked: false,
     originalColor,
+    speed: 1,
+    speedBonus: 0,
+    accumulator: 0,
+    loadoutIndex,
   };
 }
 

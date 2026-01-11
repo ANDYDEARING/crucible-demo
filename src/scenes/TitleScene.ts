@@ -1,14 +1,11 @@
 import {
   Engine,
   Scene,
-  ArcRotateCamera,
+  FreeCamera,
   Vector3,
-  HemisphericLight,
-  MeshBuilder,
-  StandardMaterial,
-  Color3,
+  Color4,
 } from "@babylonjs/core";
-import { AdvancedDynamicTexture, TextBlock, Button, StackPanel } from "@babylonjs/gui";
+import { AdvancedDynamicTexture, TextBlock, Button, StackPanel, Rectangle, Control } from "@babylonjs/gui";
 import type { SceneName } from "../main";
 
 export function createTitleScene(
@@ -17,93 +14,114 @@ export function createTitleScene(
   navigateTo: (scene: SceneName) => void
 ): Scene {
   const scene = new Scene(engine);
+  scene.clearColor = new Color4(0, 0, 0, 1);
 
-  // Background music using native Audio (more reliable cross-platform)
+  // Background music
   const music = new Audio("/audio/rise-above.m4a");
   music.loop = true;
   music.volume = 0.5;
-
-  // Force loop near end (workaround for m4a not triggering loop/ended events)
   music.addEventListener("timeupdate", () => {
     if (music.duration && music.currentTime >= music.duration - 0.5) {
       music.currentTime = 0;
     }
   });
-
   music.play();
 
-  // Clean up when scene is disposed
   scene.onDisposeObservable.add(() => {
     music.pause();
     music.src = "";
   });
 
-  // Camera - isometric-ish view of a sample grid
-  const camera = new ArcRotateCamera(
-    "camera",
-    Math.PI / 4,
-    Math.PI / 3,
-    15,
-    Vector3.Zero(),
-    scene
-  );
-  camera.attachControl(true);
+  // Simple camera (no 3D elements needed)
+  new FreeCamera("camera", Vector3.Zero(), scene);
 
-  // Light
-  new HemisphericLight("light", new Vector3(0, 1, 0), scene);
-
-  // Create a small sample grid to show off the 3D capability
-  const gridSize = 5;
-  const tileSize = 1;
-  const tileMaterial = new StandardMaterial("tileMat", scene);
-  tileMaterial.diffuseColor = new Color3(0.2, 0.4, 0.6);
-
-  for (let x = 0; x < gridSize; x++) {
-    for (let z = 0; z < gridSize; z++) {
-      const tile = MeshBuilder.CreateBox(
-        `tile_${x}_${z}`,
-        { width: tileSize * 0.9, height: 0.1, depth: tileSize * 0.9 },
-        scene
-      );
-      tile.position = new Vector3(
-        x * tileSize - (gridSize * tileSize) / 2 + tileSize / 2,
-        0,
-        z * tileSize - (gridSize * tileSize) / 2 + tileSize / 2
-      );
-      tile.material = tileMaterial;
-    }
-  }
-
-  // GUI overlay
+  // GUI
   const gui = AdvancedDynamicTexture.CreateFullscreenUI("UI");
 
+  // Animated gradient background using layered rectangles
+  const glowLayers: Rectangle[] = [];
+  const numLayers = 5;
+
+  for (let i = 0; i < numLayers; i++) {
+    const glow = new Rectangle();
+    glow.width = "150%";
+    glow.height = "150%";
+    glow.thickness = 0;
+    glow.background = `rgba(255, ${100 + i * 30}, 0, ${0.15 - i * 0.02})`;
+    glow.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_CENTER;
+    glow.verticalAlignment = Control.VERTICAL_ALIGNMENT_CENTER;
+    gui.addControl(glow);
+    glowLayers.push(glow);
+  }
+
+  // Animate the glow layers
+  let time = 0;
+  scene.onBeforeRenderObservable.add(() => {
+    time += 0.02;
+
+    for (let i = 0; i < glowLayers.length; i++) {
+      const layer = glowLayers[i];
+      const offset = i * 0.5;
+      const xWave = Math.sin(time + offset) * 5;
+      const yWave = Math.cos(time * 0.7 + offset) * 5;
+      layer.left = `${xWave}%`;
+      layer.top = `${yWave}%`;
+
+      // Pulse the opacity
+      const alpha = 0.1 + 0.05 * Math.sin(time * 1.5 + i);
+      const green = 100 + i * 30 + Math.sin(time + i) * 20;
+      layer.background = `rgba(255, ${Math.floor(green)}, 0, ${alpha})`;
+    }
+  });
+
+  // Title container
   const panel = new StackPanel();
-  panel.width = "400px";
-  panel.horizontalAlignment = StackPanel.HORIZONTAL_ALIGNMENT_CENTER;
-  panel.verticalAlignment = StackPanel.VERTICAL_ALIGNMENT_CENTER;
+  panel.width = "100%";
+  panel.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_CENTER;
+  panel.verticalAlignment = Control.VERTICAL_ALIGNMENT_CENTER;
   gui.addControl(panel);
 
-  const title = new TextBlock();
-  title.text = "TACTICAL RPG";
-  title.color = "white";
-  title.fontSize = 48;
-  title.height = "80px";
-  title.resizeToFit = true;
-  panel.addControl(title);
+  // Main title - 0.75 inches ≈ 72px at 96 DPI
+  const titleLine1 = new TextBlock();
+  titleLine1.text = "THE SUNSET GAMBIT";
+  titleLine1.color = "white";
+  titleLine1.fontFamily = "'Exo 2', sans-serif";
+  titleLine1.fontWeight = "700";
+  titleLine1.fontSize = 72;
+  titleLine1.height = "90px";
+  titleLine1.outlineWidth = 6;
+  titleLine1.outlineColor = "black";
+  panel.addControl(titleLine1);
 
-  const subtitle = new TextBlock();
-  subtitle.text = "Prototype";
-  subtitle.color = "#888888";
-  subtitle.fontSize = 24;
-  subtitle.height = "40px";
-  panel.addControl(subtitle);
+  // Subtitle - slightly larger for emphasis
+  const titleLine2 = new TextBlock();
+  titleLine2.text = "CRUCIBLE";
+  titleLine2.color = "white";
+  titleLine2.fontFamily = "'Exo 2', sans-serif";
+  titleLine2.fontWeight = "700";
+  titleLine2.fontSize = 96;
+  titleLine2.height = "120px";
+  titleLine2.outlineWidth = 7;
+  titleLine2.outlineColor = "black";
+  panel.addControl(titleLine2);
 
+  // Spacer
+  const spacer = new Rectangle();
+  spacer.height = "40px";
+  spacer.thickness = 0;
+  spacer.background = "transparent";
+  panel.addControl(spacer);
+
+  // Play button
   const playButton = Button.CreateSimpleButton("playBtn", "PLAY");
   playButton.width = "200px";
   playButton.height = "50px";
   playButton.color = "white";
-  playButton.background = "#444444";
+  playButton.fontFamily = "'Exo 2', sans-serif";
+  playButton.fontSize = 28;
+  playButton.background = "rgba(80, 80, 80, 0.8)";
   playButton.cornerRadius = 5;
+  playButton.thickness = 2;
   playButton.onPointerClickObservable.add(() => {
     navigateTo("loadout");
   });

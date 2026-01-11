@@ -48,15 +48,15 @@ export function createLoadoutScene(
   title.text = "SELECT YOUR UNITS";
   title.color = "white";
   title.fontSize = 36;
-  title.top = "-42%";
+  title.top = "-44%";
   title.fontWeight = "bold";
   gui.addControl(title);
 
-  // Main container
+  // Main container - shifted up to make room for bottom UI
   const mainGrid = new Grid();
   mainGrid.width = "90%";
-  mainGrid.height = "75%";
-  mainGrid.top = "5%";
+  mainGrid.height = "65%";
+  mainGrid.top = "-5%";
   mainGrid.addColumnDefinition(0.5);
   mainGrid.addColumnDefinition(0.5);
   mainGrid.addRowDefinition(1);
@@ -78,8 +78,8 @@ export function createLoadoutScene(
   // Unit info panel at bottom
   const infoPanel = new Rectangle();
   infoPanel.width = "80%";
-  infoPanel.height = "60px";
-  infoPanel.top = "42%";
+  infoPanel.height = "50px";
+  infoPanel.top = "38%";
   infoPanel.background = "#222233";
   infoPanel.cornerRadius = 5;
   infoPanel.thickness = 0;
@@ -88,14 +88,14 @@ export function createLoadoutScene(
   const infoText = new TextBlock();
   infoText.text = "Hover over a unit type to see stats";
   infoText.color = "#888888";
-  infoText.fontSize = 16;
+  infoText.fontSize = 14;
   infoPanel.addControl(infoText);
 
   // Start battle button
   const startBtn = Button.CreateSimpleButton("startBattle", "START BATTLE");
   startBtn.width = "200px";
   startBtn.height = "50px";
-  startBtn.top = "46%";
+  startBtn.top = "44%";
   startBtn.color = "white";
   startBtn.background = "#444444";
   startBtn.cornerRadius = 5;
