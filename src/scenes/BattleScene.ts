@@ -12,15 +12,16 @@ import {
   PointerEventTypes,
 } from "@babylonjs/core";
 import { AdvancedDynamicTexture, TextBlock, Button, Rectangle } from "@babylonjs/gui";
+import type { Loadout, UnitType } from "../types";
 
 const GRID_SIZE = 8;
 const TILE_SIZE = 1;
 const TILE_GAP = 0.05;
 
 const UNIT_STATS = {
-  tank: { hp: 100, attack: 15, moveRange: 2, attackRange: 1 },
-  damage: { hp: 50, attack: 30, moveRange: 4, attackRange: 2 },
-  support: { hp: 60, attack: 10, moveRange: 3, attackRange: 3 },
+  tank: { hp: 100, attack: 15, moveRange: 2, attackRange: 1, healAmount: 0 },
+  damage: { hp: 50, attack: 30, moveRange: 4, attackRange: 2, healAmount: 0 },
+  support: { hp: 60, attack: 10, moveRange: 3, attackRange: 3, healAmount: 25 },
 };
 
 type Team = "player" | "enemy";
@@ -37,6 +38,7 @@ interface Unit {
   hp: number;
   maxHp: number;
   attack: number;
+  healAmount: number;
   hpBar?: Rectangle;
   hpBarBg?: Rectangle;
   hasMoved: boolean;
@@ -44,7 +46,7 @@ interface Unit {
   originalColor: Color3;
 }
 
-export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement): Scene {
+export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, loadout: Loadout | null): Scene {
   const scene = new Scene(engine);
   scene.clearColor.set(0.1, 0.1, 0.15, 1);
 
@@ -82,6 +84,9 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement): S
   const attackableMaterial = new StandardMaterial("attackableMat", scene);
   attackableMaterial.diffuseColor = new Color3(0.9, 0.3, 0.3);
 
+  const healableMaterial = new StandardMaterial("healableMat", scene);
+  healableMaterial.diffuseColor = new Color3(0.3, 0.9, 0.5);
+
   const unitMaterials = {
     tank: createUnitMaterial("tank", new Color3(0.3, 0.3, 0.8), scene),
     damage: createUnitMaterial("damage", new Color3(0.8, 0.2, 0.2), scene),
@@ -117,18 +122,39 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement): S
   // Units
   const units: Unit[] = [];
 
-  units.push(createUnit("tank", "player", 1, 1, scene, unitMaterials, gridOffset, gui));
-  units.push(createUnit("damage", "player", 3, 0, scene, unitMaterials, gridOffset, gui));
-  units.push(createUnit("support", "player", 5, 1, scene, unitMaterials, gridOffset, gui));
+  // Starting positions for each team
+  const playerPositions = [
+    { x: 1, z: 1 },
+    { x: 3, z: 0 },
+    { x: 5, z: 1 },
+  ];
+  const enemyPositions = [
+    { x: 6, z: 6 },
+    { x: 4, z: 7 },
+    { x: 2, z: 6 },
+  ];
 
-  units.push(createUnit("tank", "enemy", 6, 6, scene, unitMaterials, gridOffset, gui));
-  units.push(createUnit("damage", "enemy", 4, 7, scene, unitMaterials, gridOffset, gui));
-  units.push(createUnit("support", "enemy", 2, 6, scene, unitMaterials, gridOffset, gui));
+  // Use loadout if provided, otherwise default setup
+  const playerUnits: UnitType[] = loadout?.player ?? ["tank", "damage", "support"];
+  const enemyUnits: UnitType[] = loadout?.enemy ?? ["tank", "damage", "support"];
+
+  // Spawn player units
+  for (let i = 0; i < playerUnits.length; i++) {
+    const pos = playerPositions[i];
+    units.push(createUnit(playerUnits[i], "player", pos.x, pos.z, scene, unitMaterials, gridOffset, gui));
+  }
+
+  // Spawn enemy units
+  for (let i = 0; i < enemyUnits.length; i++) {
+    const pos = enemyPositions[i];
+    units.push(createUnit(enemyUnits[i], "enemy", pos.x, pos.z, scene, unitMaterials, gridOffset, gui));
+  }
 
   // Game state
   let selectedUnit: Unit | null = null;
   let highlightedTiles: Mesh[] = [];
   let attackableUnits: Unit[] = [];
+  let healableUnits: Unit[] = [];
   let gameOver = false;
   let currentTeam: Team = "player";
 
@@ -143,6 +169,7 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement): S
     }
     highlightedTiles = [];
     attackableUnits = [];
+    healableUnits = [];
   }
 
   function getValidMoveTiles(unit: Unit): { x: number; z: number }[] {
@@ -171,6 +198,18 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement): S
     });
   }
 
+  function getHealableAllies(unit: Unit): Unit[] {
+    // Only support can heal, and only if hasn't attacked this turn
+    if (unit.healAmount <= 0 || unit.hasAttacked) return [];
+    return units.filter(u => {
+      if (u.team !== unit.team) return false; // Must be same team
+      if (u === unit) return false; // Can't heal self
+      if (u.hp >= u.maxHp) return false; // Already at full health
+      const distance = Math.abs(u.gridX - unit.gridX) + Math.abs(u.gridZ - unit.gridZ);
+      return distance <= unit.attackRange; // Uses attack range for heal range
+    });
+  }
+
   function highlightValidActions(unit: Unit): void {
     clearHighlights();
 
@@ -192,6 +231,14 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement): S
     for (const enemy of attackableUnits) {
       const tile = tiles[enemy.gridX][enemy.gridZ];
       tile.material = attackableMaterial;
+      highlightedTiles.push(tile);
+    }
+
+    // Highlight healable allies (support only, if hasn't attacked)
+    healableUnits = getHealableAllies(unit);
+    for (const ally of healableUnits) {
+      const tile = tiles[ally.gridX][ally.gridZ];
+      tile.material = healableMaterial;
       highlightedTiles.push(tile);
     }
   }
@@ -250,6 +297,17 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement): S
       if (index > -1) units.splice(index, 1);
       checkWinCondition();
     }
+  }
+
+  function healUnit(healer: Unit, target: Unit): void {
+    const healedAmount = Math.min(healer.healAmount, target.maxHp - target.hp);
+    target.hp += healedAmount;
+    console.log(`${healer.team} ${healer.type} heals ${target.team} ${target.type} for ${healedAmount} HP! (${target.hp}/${target.maxHp} HP)`);
+
+    healer.hasAttacked = true; // Uses the same action as attacking
+    setUnitExhausted(healer);
+
+    updateHpBar(target);
   }
 
   function checkWinCondition(): void {
@@ -339,12 +397,13 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement): S
 
           // After moving, check if can still attack
           if (!selectedUnit.hasAttacked) {
-            // Re-highlight to show attack options from new position
+            // Re-highlight to show attack/heal options from new position
             highlightValidActions(selectedUnit);
 
             // If no actions left, deselect
             const canAttack = getAttackableEnemies(selectedUnit).length > 0;
-            if (!canAttack) {
+            const canHeal = getHealableAllies(selectedUnit).length > 0;
+            if (!canAttack && !canHeal) {
               clearHighlights();
               selectedUnit = null;
             }
@@ -365,6 +424,14 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement): S
         // Check if clicking an attackable enemy
         if (attackableUnits.includes(clickedUnit)) {
           attackUnit(selectedUnit, clickedUnit);
+          clearHighlights();
+          selectedUnit = null;
+          return;
+        }
+
+        // Check if clicking a healable ally
+        if (healableUnits.includes(clickedUnit)) {
+          healUnit(selectedUnit, clickedUnit);
           clearHighlights();
           selectedUnit = null;
           return;
@@ -530,6 +597,7 @@ function createUnit(
     hp: stats.hp,
     maxHp: stats.hp,
     attack: stats.attack,
+    healAmount: stats.healAmount,
     hpBar,
     hpBarBg,
     hasMoved: false,

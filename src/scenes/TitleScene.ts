@@ -22,6 +22,11 @@ export function createTitleScene(
   const music = new Audio("/audio/rise-above.m4a");
   music.loop = true;
   music.volume = 0.5;
+  // Ensure looping works
+  music.addEventListener("ended", () => {
+    music.currentTime = 0;
+    music.play();
+  });
   music.play();
 
   // Clean up when scene is disposed
@@ -97,7 +102,7 @@ export function createTitleScene(
   playButton.background = "#444444";
   playButton.cornerRadius = 5;
   playButton.onPointerClickObservable.add(() => {
-    navigateTo("battle");
+    navigateTo("loadout");
   });
   panel.addControl(playButton);
 
