@@ -18,6 +18,18 @@ export function createTitleScene(
 ): Scene {
   const scene = new Scene(engine);
 
+  // Background music using native Audio (more reliable cross-platform)
+  const music = new Audio("/audio/rise-above.m4a");
+  music.loop = true;
+  music.volume = 0.5;
+  music.play();
+
+  // Clean up when scene is disposed
+  scene.onDisposeObservable.add(() => {
+    music.pause();
+    music.src = "";
+  });
+
   // Camera - isometric-ish view of a sample grid
   const camera = new ArcRotateCamera(
     "camera",
