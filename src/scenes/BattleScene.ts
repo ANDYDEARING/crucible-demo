@@ -185,9 +185,104 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
   let firstRoundQueue: Unit[] = [];
   const ACCUMULATOR_THRESHOLD = 10;
 
+  // Active unit corner indicators
+  let cornerMeshes: Mesh[] = [];
+  let cornerMaterial: StandardMaterial | null = null;
+  let pulseTime = 0;
+
   function getEffectiveSpeed(unit: Unit): number {
     return unit.speed + unit.speedBonus;
   }
+
+  function createCornerIndicators(unit: Unit): void {
+    clearCornerIndicators();
+
+    const color = unit.team === "player"
+      ? new Color3(0.2, 0.5, 1.0)  // Blue for player
+      : new Color3(1.0, 0.3, 0.2); // Red for enemy
+
+    cornerMaterial = new StandardMaterial("cornerMat", scene);
+    cornerMaterial.diffuseColor = color;
+    cornerMaterial.emissiveColor = color.scale(0.5);
+
+    const cornerLength = 0.2;  // Length of each arm
+    const cornerWidth = 0.06;  // Width/thickness of the arms
+    const tileHalf = (TILE_SIZE - TILE_GAP) / 2;  // Half tile size
+
+    // Create L-shaped corners at each corner of the tile
+    // Each corner needs arms pointing inward toward tile center
+    const corners = [
+      { x: -tileHalf, z: -tileHalf, armDirX: 1, armDirZ: 1 },   // Bottom-left: arms go +X, +Z
+      { x: tileHalf, z: -tileHalf, armDirX: -1, armDirZ: 1 },   // Bottom-right: arms go -X, +Z
+      { x: tileHalf, z: tileHalf, armDirX: -1, armDirZ: -1 },   // Top-right: arms go -X, -Z
+      { x: -tileHalf, z: tileHalf, armDirX: 1, armDirZ: -1 },   // Top-left: arms go +X, -Z
+    ];
+
+    const baseX = unit.gridX * TILE_SIZE - gridOffset;
+    const baseZ = unit.gridZ * TILE_SIZE - gridOffset;
+
+    for (const corner of corners) {
+      // Horizontal arm (along X)
+      const armX = MeshBuilder.CreateBox("cornerArmX", {
+        width: cornerLength,
+        height: 0.02,
+        depth: cornerWidth,
+      }, scene);
+      armX.material = cornerMaterial;
+      armX.position = new Vector3(
+        baseX + corner.x + (corner.armDirX * cornerLength / 2),
+        0.06,
+        baseZ + corner.z + (corner.armDirZ * cornerWidth / 2)
+      );
+      cornerMeshes.push(armX);
+
+      // Vertical arm (along Z)
+      const armZ = MeshBuilder.CreateBox("cornerArmZ", {
+        width: cornerWidth,
+        height: 0.02,
+        depth: cornerLength,
+      }, scene);
+      armZ.material = cornerMaterial;
+      armZ.position = new Vector3(
+        baseX + corner.x + (corner.armDirX * cornerWidth / 2),
+        0.06,
+        baseZ + corner.z + (corner.armDirZ * cornerLength / 2)
+      );
+      cornerMeshes.push(armZ);
+    }
+  }
+
+  function clearCornerIndicators(): void {
+    for (const mesh of cornerMeshes) {
+      mesh.dispose();
+    }
+    cornerMeshes = [];
+    if (cornerMaterial) {
+      cornerMaterial.dispose();
+      cornerMaterial = null;
+    }
+  }
+
+  function updateCornerIndicators(unit: Unit): void {
+    if (cornerMeshes.length === 0) return;
+
+    // Recreate corners at new position (simpler than repositioning 8 meshes)
+    createCornerIndicators(unit);
+  }
+
+  // Animation loop for pulsing corners
+  scene.onBeforeRenderObservable.add(() => {
+    if (cornerMaterial && cornerMeshes.length > 0) {
+      pulseTime += engine.getDeltaTime() / 1000;
+      const pulse = 0.5 + 0.5 * Math.sin(pulseTime * 4); // Pulse 4 times per second
+
+      const baseColor = currentUnit?.team === "player"
+        ? new Color3(0.2, 0.5, 1.0)
+        : new Color3(1.0, 0.3, 0.2);
+
+      cornerMaterial.emissiveColor = baseColor.scale(0.3 + pulse * 0.7);
+    }
+  });
 
   function buildFirstRoundQueue(): void {
     // Alternate teams: P1, P2, P1, P2, P1, P2
@@ -258,7 +353,7 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
     // Reset accumulator after acting
     unit.accumulator = 0;
 
-    // Dim all units that aren't the active one
+    // Reset all unit appearances
     for (const u of units) {
       if (u === unit) {
         resetUnitAppearance(u);
@@ -266,6 +361,9 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
         setUnitInactive(u);
       }
     }
+
+    // Create pulsing corner indicators for active unit
+    createCornerIndicators(unit);
 
     updateTurnIndicator();
   }
@@ -283,6 +381,9 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
 
     // Mark as exhausted visually
     setUnitExhausted(unit);
+
+    // Clear corner indicators
+    clearCornerIndicators();
 
     lastActingTeam = unit.team;
     clearHighlights();
@@ -355,7 +456,6 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
     if (unit.healAmount <= 0 || unit.hasAttacked) return [];
     return units.filter(u => {
       if (u.team !== unit.team) return false; // Must be same team
-      if (u === unit) return false; // Can't heal self
       if (u.hp >= u.maxHp) return false; // Already at full health
       const distance = Math.abs(u.gridX - unit.gridX) + Math.abs(u.gridZ - unit.gridZ);
       return distance <= unit.attackRange; // Uses attack range for heal range
@@ -415,26 +515,8 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
   }
 
   function setUnitInactive(unit: Unit): void {
-    // Partially desaturate - not their turn yet
-    const mat = unit.mesh.material as StandardMaterial;
-    const orig = unit.originalColor;
-    const gray = (orig.r + orig.g + orig.b) / 3;
-    // Blend 50% toward gray
-    mat.diffuseColor = new Color3(
-      orig.r * 0.5 + gray * 0.5,
-      orig.g * 0.5 + gray * 0.5,
-      orig.b * 0.5 + gray * 0.5
-    ).scale(0.6);
-
-    // Dim the base partially
-    const baseMat = unit.baseMesh.material as StandardMaterial;
-    if (unit.team === "player") {
-      baseMat.diffuseColor = new Color3(0.15, 0.3, 0.6);
-      baseMat.emissiveColor = new Color3(0.05, 0.1, 0.2);
-    } else {
-      baseMat.diffuseColor = new Color3(0.6, 0.3, 0.15);
-      baseMat.emissiveColor = new Color3(0.2, 0.1, 0.05);
-    }
+    // Keep normal appearance - no dimming for non-active units
+    resetUnitAppearance(unit);
   }
 
   function resetUnitAppearance(unit: Unit): void {
@@ -569,6 +651,7 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
       if (selectedUnit) {
         if (isValidMove(gridX, gridZ)) {
           moveUnit(selectedUnit, gridX, gridZ, gridOffset);
+          updateCornerIndicators(selectedUnit);
           selectedUnit.hasMoved = true;
 
           // After moving, check if can still attack
