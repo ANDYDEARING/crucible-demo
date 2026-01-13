@@ -201,8 +201,14 @@ export function createTitleScene(
   playButton.addControl(buttonText);
 
   // Re-render text after fonts load to fix centering
-  document.fonts.ready.then(() => {
-    buttonText.text = "B E G I N";
+  document.fonts.load("22px 'Bebas Neue'").then(() => {
+    // Small delay to ensure GUI has processed the font
+    setTimeout(() => {
+      buttonText.text = "B E G I N ";
+      setTimeout(() => {
+        buttonText.text = "B E G I N";
+      }, 50);
+    }, 100);
   });
 
   // Hover effects
