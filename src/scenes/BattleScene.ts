@@ -71,6 +71,21 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
     music.src = "";
   });
 
+  // Sound effects
+  const sfx = {
+    hitLight: new Audio("/audio/effects/hit-light.flac"),
+    hitMedium: new Audio("/audio/effects/hit-medium.flac"),
+    hitHeavy: new Audio("/audio/effects/hit-heavy.flac"),
+    heal: new Audio("/audio/effects/Cure1.wav"),
+  };
+  // Set volume for sound effects
+  Object.values(sfx).forEach(sound => sound.volume = 0.6);
+
+  function playSfx(sound: HTMLAudioElement): void {
+    sound.currentTime = 0;
+    sound.play();
+  }
+
   const camera = new ArcRotateCamera(
     "camera",
     Math.PI / 4,
@@ -539,6 +554,15 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
     defender.hp -= attacker.attack;
     console.log(`${attacker.team} ${attacker.type} attacks ${defender.team} ${defender.type} for ${attacker.attack} damage! (${defender.hp}/${defender.maxHp} HP)`);
 
+    // Play hit sound based on attacker type
+    if (attacker.type === "support") {
+      playSfx(sfx.hitLight);
+    } else if (attacker.type === "tank") {
+      playSfx(sfx.hitMedium);
+    } else if (attacker.type === "damage") {
+      playSfx(sfx.hitHeavy);
+    }
+
     attacker.hasAttacked = true;
     setUnitExhausted(attacker);
 
@@ -569,6 +593,8 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
     const healedAmount = Math.min(healer.healAmount, target.maxHp - target.hp);
     target.hp += healedAmount;
     console.log(`${healer.team} ${healer.type} heals ${target.team} ${target.type} for ${healedAmount} HP! (${target.hp}/${target.maxHp} HP)`);
+
+    playSfx(sfx.heal);
 
     healer.hasAttacked = true; // Uses the same action as attacking
     setUnitExhausted(healer);
