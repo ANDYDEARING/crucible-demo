@@ -106,10 +106,10 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
 
   // Tile materials
   const tileMaterialLight = new StandardMaterial("tileLightMat", scene);
-  tileMaterialLight.diffuseColor = new Color3(0.3, 0.5, 0.3);
+  tileMaterialLight.diffuseColor = new Color3(0.18, 0.22, 0.17);
 
   const tileMaterialDark = new StandardMaterial("tileDarkMat", scene);
-  tileMaterialDark.diffuseColor = new Color3(0.2, 0.4, 0.2);
+  tileMaterialDark.diffuseColor = new Color3(0.12, 0.15, 0.11);
 
   const selectedMaterial = new StandardMaterial("selectedMat", scene);
   selectedMaterial.diffuseColor = new Color3(0.8, 0.8, 0.2);
