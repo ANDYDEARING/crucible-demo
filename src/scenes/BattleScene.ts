@@ -14,7 +14,7 @@ import {
 } from "@babylonjs/core";
 import "@babylonjs/loaders/glTF";
 import { AdvancedDynamicTexture, TextBlock, Button, Rectangle } from "@babylonjs/gui";
-import type { Loadout, UnitType } from "../types";
+import type { Loadout, UnitType, UnitSelection } from "../types";
 
 const GRID_SIZE = 8;
 const TILE_SIZE = 1;
@@ -173,8 +173,11 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
   ];
 
   // Use loadout if provided, otherwise default setup
-  const playerUnits: UnitType[] = loadout?.player ?? ["tank", "damage", "support"];
-  const enemyUnits: UnitType[] = loadout?.enemy ?? ["tank", "damage", "support"];
+  const defaultUnits: UnitSelection[] = [{ type: "tank" }, { type: "damage" }, { type: "support" }];
+  const playerSelections = loadout?.player ?? defaultUnits;
+  const enemySelections = loadout?.enemy ?? defaultUnits;
+  const playerUnits: UnitType[] = playerSelections.map(u => u.type);
+  const enemyUnits: UnitType[] = enemySelections.map(u => u.type);
 
   // Spawn player units
   for (let i = 0; i < playerUnits.length; i++) {

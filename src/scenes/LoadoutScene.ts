@@ -12,8 +12,14 @@ import {
   StackPanel,
   Rectangle,
   Grid,
+  Control,
 } from "@babylonjs/gui";
-import { UnitType, UNIT_INFO, Loadout } from "../types";
+import { UNIT_INFO, Loadout, UnitSelection, SupportCustomization } from "../types";
+
+// Color palette options (indices into these arrays)
+const SKIN_TONES = ["#FFE0BD", "#FFCD94", "#EAC086", "#D4A373", "#C68642", "#8D5524", "#6B4423", "#4A3728"];
+const HAIR_COLORS = ["#090806", "#2C222B", "#6A4E42", "#B55239", "#DCD0BA", "#E5C8A8", "#977961", "#E8E0D5", "#CC2222", "#22AA44", "#2266DD", "#8833AA"];
+const EYE_COLORS = ["#634E34", "#463320", "#1C7847", "#2E8B57", "#1E90FF", "#4169E1", "#808080", "#000000", "#CC2222", "#8833AA"];
 
 export function createLoadoutScene(
   engine: Engine,
@@ -52,11 +58,11 @@ export function createLoadoutScene(
   title.fontWeight = "bold";
   gui.addControl(title);
 
-  // Main container - shifted up to make room for bottom UI
+  // Main container
   const mainGrid = new Grid();
   mainGrid.width = "90%";
-  mainGrid.height = "65%";
-  mainGrid.top = "-5%";
+  mainGrid.height = "70%";
+  mainGrid.top = "-2%";
   mainGrid.addColumnDefinition(0.5);
   mainGrid.addColumnDefinition(0.5);
   mainGrid.addRowDefinition(1);
@@ -79,7 +85,7 @@ export function createLoadoutScene(
   const infoPanel = new Rectangle();
   infoPanel.width = "80%";
   infoPanel.height = "50px";
-  infoPanel.top = "38%";
+  infoPanel.top = "40%";
   infoPanel.background = "#222233";
   infoPanel.cornerRadius = 5;
   infoPanel.thickness = 0;
@@ -95,7 +101,7 @@ export function createLoadoutScene(
   const startBtn = Button.CreateSimpleButton("startBattle", "START BATTLE");
   startBtn.width = "200px";
   startBtn.height = "50px";
-  startBtn.top = "44%";
+  startBtn.top = "46%";
   startBtn.color = "white";
   startBtn.background = "#444444";
   startBtn.cornerRadius = 5;
@@ -118,7 +124,7 @@ export function createLoadoutScene(
   function createPlayerPanel(
     playerName: string,
     color: string,
-    selectionArray: UnitType[],
+    selectionArray: UnitSelection[],
     onUpdate: () => void
   ): Rectangle {
     const panel = new Rectangle();
@@ -137,8 +143,8 @@ export function createLoadoutScene(
     const nameText = new TextBlock();
     nameText.text = playerName;
     nameText.color = color;
-    nameText.fontSize = 28;
-    nameText.height = "50px";
+    nameText.fontSize = 24;
+    nameText.height = "40px";
     nameText.fontWeight = "bold";
     container.addControl(nameText);
 
@@ -146,8 +152,8 @@ export function createLoadoutScene(
     const selectionDisplay = new TextBlock();
     selectionDisplay.text = "Selected: (choose 3)";
     selectionDisplay.color = "#888888";
-    selectionDisplay.fontSize = 16;
-    selectionDisplay.height = "30px";
+    selectionDisplay.fontSize = 14;
+    selectionDisplay.height = "25px";
     container.addControl(selectionDisplay);
 
     const updateSelectionDisplay = (): void => {
@@ -155,65 +161,288 @@ export function createLoadoutScene(
         selectionDisplay.text = "Selected: (choose 3)";
         selectionDisplay.color = "#888888";
       } else {
-        const names = selectionArray.map(t => UNIT_INFO[t].name);
+        const names = selectionArray.map(u => UNIT_INFO[u.type].name);
         selectionDisplay.text = `Selected: ${names.join(", ")}`;
         selectionDisplay.color = selectionArray.length === 3 ? "#44ff44" : "white";
       }
     };
 
-    // Unit type buttons
-    const unitTypes: UnitType[] = ["tank", "damage", "support"];
-    for (const unitType of unitTypes) {
-      const info = UNIT_INFO[unitType];
+    // Tank button (simple)
+    const tankBtn = Button.CreateSimpleButton(`${playerName}_tank`, "+ Tank");
+    tankBtn.width = "100%";
+    tankBtn.height = "40px";
+    tankBtn.color = "white";
+    tankBtn.background = "#333355";
+    tankBtn.cornerRadius = 5;
+    tankBtn.paddingTop = "3px";
+    tankBtn.paddingBottom = "3px";
+    tankBtn.onPointerEnterObservable.add(() => {
+      const info = UNIT_INFO.tank;
+      infoText.text = `${info.name}: HP ${info.hp} | ATK ${info.attack} | Move ${info.moveRange} | Range ${info.attackRange}`;
+      infoText.color = "white";
+    });
+    tankBtn.onPointerOutObservable.add(() => {
+      infoText.text = "Hover over a unit type to see stats";
+      infoText.color = "#888888";
+    });
+    tankBtn.onPointerClickObservable.add(() => {
+      if (selectionArray.length < 3) {
+        selectionArray.push({ type: "tank" });
+        updateSelectionDisplay();
+        onUpdate();
+      }
+    });
+    container.addControl(tankBtn);
 
-      const btn = Button.CreateSimpleButton(`${playerName}_${unitType}`, `+ ${info.name}`);
-      btn.width = "100%";
-      btn.height = "60px";
-      btn.color = "white";
-      btn.background = "#333355";
-      btn.cornerRadius = 5;
-      btn.paddingTop = "5px";
-      btn.paddingBottom = "5px";
+    // Damage button (simple)
+    const damageBtn = Button.CreateSimpleButton(`${playerName}_damage`, "+ Damage");
+    damageBtn.width = "100%";
+    damageBtn.height = "40px";
+    damageBtn.color = "white";
+    damageBtn.background = "#333355";
+    damageBtn.cornerRadius = 5;
+    damageBtn.paddingTop = "3px";
+    damageBtn.paddingBottom = "3px";
+    damageBtn.onPointerEnterObservable.add(() => {
+      const info = UNIT_INFO.damage;
+      infoText.text = `${info.name}: HP ${info.hp} | ATK ${info.attack} | Move ${info.moveRange} | Range ${info.attackRange}`;
+      infoText.color = "white";
+    });
+    damageBtn.onPointerOutObservable.add(() => {
+      infoText.text = "Hover over a unit type to see stats";
+      infoText.color = "#888888";
+    });
+    damageBtn.onPointerClickObservable.add(() => {
+      if (selectionArray.length < 3) {
+        selectionArray.push({ type: "damage" });
+        updateSelectionDisplay();
+        onUpdate();
+      }
+    });
+    container.addControl(damageBtn);
 
-      btn.onPointerEnterObservable.add(() => {
-        infoText.text = `${info.name}: HP ${info.hp} | ATK ${info.attack} | Move ${info.moveRange} | Range ${info.attackRange} - ${info.description}`;
-        infoText.color = "white";
-      });
+    // === SUPPORT PANEL (big, with customization) ===
+    const supportPanel = new Rectangle();
+    supportPanel.width = "100%";
+    supportPanel.height = "250px";
+    supportPanel.background = "#2a2a4e";
+    supportPanel.cornerRadius = 5;
+    supportPanel.thickness = 1;
+    supportPanel.color = "#555588";
+    supportPanel.paddingTop = "5px";
+    container.addControl(supportPanel);
 
-      btn.onPointerOutObservable.add(() => {
-        infoText.text = "Hover over a unit type to see stats";
-        infoText.color = "#888888";
-      });
+    const supportContent = new StackPanel();
+    supportContent.width = "95%";
+    supportPanel.addControl(supportContent);
 
-      btn.onPointerClickObservable.add(() => {
-        if (selectionArray.length < 3) {
-          selectionArray.push(unitType);
-          updateSelectionDisplay();
-          onUpdate();
-        }
-      });
+    // Support title
+    const supportTitle = new TextBlock();
+    supportTitle.text = "SUPPORT (Medic)";
+    supportTitle.color = "#88ff88";
+    supportTitle.fontSize = 16;
+    supportTitle.height = "25px";
+    supportTitle.fontWeight = "bold";
+    supportContent.addControl(supportTitle);
 
-      container.addControl(btn);
-    }
+    // Track current customization for this panel
+    const currentCustomization: SupportCustomization = {
+      head: 0,
+      weapon: "gun",
+      skinTone: 2,
+      hairColor: 0,
+      eyeColor: 0
+    };
+
+    // Two-column grid for options (3 rows)
+    const optionsGrid = new Grid();
+    optionsGrid.width = "100%";
+    optionsGrid.height = "135px";
+    optionsGrid.addColumnDefinition(0.5);
+    optionsGrid.addColumnDefinition(0.5);
+    optionsGrid.addRowDefinition(1/3);
+    optionsGrid.addRowDefinition(1/3);
+    optionsGrid.addRowDefinition(1/3);
+    supportContent.addControl(optionsGrid);
+
+    // Head chooser (row 0, col 0)
+    const headRow = createOptionChooser("Head", ["1", "2", "3", "4"], 0, (idx) => {
+      currentCustomization.head = idx;
+    });
+    optionsGrid.addControl(headRow, 0, 0);
+
+    // Weapon chooser (row 0, col 1)
+    const weaponRow = createOptionChooser("Weapon", ["Gun", "Sword"], 0, (idx) => {
+      currentCustomization.weapon = idx === 0 ? "gun" : "sword";
+    });
+    optionsGrid.addControl(weaponRow, 0, 1);
+
+    // Skin chooser (row 1, col 0)
+    const skinRow = createColorChooser("Skin", SKIN_TONES, 2, (idx) => {
+      currentCustomization.skinTone = idx;
+    });
+    optionsGrid.addControl(skinRow, 1, 0);
+
+    // Hair chooser (row 1, col 1)
+    const hairRow = createColorChooser("Hair", HAIR_COLORS, 0, (idx) => {
+      currentCustomization.hairColor = idx;
+    });
+    optionsGrid.addControl(hairRow, 1, 1);
+
+    // Eye chooser (row 2, col 0)
+    const eyeRow = createColorChooser("Eyes", EYE_COLORS, 0, (idx) => {
+      currentCustomization.eyeColor = idx;
+    });
+    optionsGrid.addControl(eyeRow, 2, 0);
+
+    // +Add Support button (below the grid)
+    const addSupportBtn = Button.CreateSimpleButton(`${playerName}_addSupport`, "+ Add Medic");
+    addSupportBtn.width = "95%";
+    addSupportBtn.height = "45px";
+    addSupportBtn.color = "white";
+    addSupportBtn.background = "#338833";
+    addSupportBtn.cornerRadius = 5;
+    addSupportBtn.fontSize = 18;
+    addSupportBtn.fontWeight = "bold";
+    addSupportBtn.onPointerEnterObservable.add(() => {
+      const info = UNIT_INFO.support;
+      infoText.text = `${info.name}: HP ${info.hp} | ATK ${info.attack} | Move ${info.moveRange} | Range ${info.attackRange} - ${info.description}`;
+      infoText.color = "white";
+      addSupportBtn.background = "#44aa44";
+    });
+    addSupportBtn.onPointerOutObservable.add(() => {
+      infoText.text = "Hover over a unit type to see stats";
+      infoText.color = "#888888";
+      addSupportBtn.background = "#338833";
+    });
+    addSupportBtn.onPointerClickObservable.add(() => {
+      if (selectionArray.length < 3) {
+        // Clone the customization so each medic can be different
+        selectionArray.push({
+          type: "support",
+          customization: { ...currentCustomization }
+        });
+        updateSelectionDisplay();
+        onUpdate();
+      }
+    });
+    supportContent.addControl(addSupportBtn);
 
     // Clear button
-    const clearBtn = Button.CreateSimpleButton(`${playerName}_clear`, "Clear");
+    const clearBtn = Button.CreateSimpleButton(`${playerName}_clear`, "Clear All");
     clearBtn.width = "100%";
-    clearBtn.height = "40px";
+    clearBtn.height = "30px";
     clearBtn.color = "#ff6666";
     clearBtn.background = "#442222";
     clearBtn.cornerRadius = 5;
-    clearBtn.paddingTop = "10px";
-
+    clearBtn.paddingTop = "5px";
     clearBtn.onPointerClickObservable.add(() => {
       selectionArray.length = 0;
       updateSelectionDisplay();
       onUpdate();
     });
-
     container.addControl(clearBtn);
 
     return panel;
+  }
+
+  // Helper: create text option chooser (e.g., Gun/Sword)
+  function createOptionChooser(
+    label: string,
+    options: string[],
+    defaultIdx: number,
+    onChange: (idx: number) => void
+  ): StackPanel {
+    const row = new StackPanel();
+    row.width = "100%";
+    row.height = "100%";
+    row.paddingLeft = "5px";
+    row.paddingRight = "5px";
+
+    const labelText = new TextBlock();
+    labelText.text = label;
+    labelText.color = "#aaaaaa";
+    labelText.fontSize = 12;
+    labelText.height = "16px";
+    labelText.textHorizontalAlignment = Control.HORIZONTAL_ALIGNMENT_LEFT;
+    row.addControl(labelText);
+
+    const btnRow = new StackPanel();
+    btnRow.isVertical = false;
+    btnRow.height = "25px";
+    btnRow.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_LEFT;
+    row.addControl(btnRow);
+
+    const buttons: Button[] = [];
+    options.forEach((opt, i) => {
+      const btn = Button.CreateSimpleButton(`opt_${label}_${i}`, opt);
+      btn.width = "35px";
+      btn.height = "22px";
+      btn.color = "white";
+      btn.background = i === defaultIdx ? "#4488ff" : "#333355";
+      btn.cornerRadius = 3;
+      btn.fontSize = 10;
+      btn.onPointerClickObservable.add(() => {
+        buttons.forEach((b, j) => {
+          b.background = j === i ? "#4488ff" : "#333355";
+        });
+        onChange(i);
+      });
+      buttons.push(btn);
+      btnRow.addControl(btn);
+    });
+
+    return row;
+  }
+
+  // Helper: create color swatch chooser
+  function createColorChooser(
+    label: string,
+    colors: string[],
+    defaultIdx: number,
+    onChange: (idx: number) => void
+  ): StackPanel {
+    const row = new StackPanel();
+    row.width = "100%";
+    row.height = "100%";
+    row.paddingLeft = "5px";
+    row.paddingRight = "5px";
+
+    const labelText = new TextBlock();
+    labelText.text = label;
+    labelText.color = "#aaaaaa";
+    labelText.fontSize = 12;
+    labelText.height = "16px";
+    labelText.textHorizontalAlignment = Control.HORIZONTAL_ALIGNMENT_LEFT;
+    row.addControl(labelText);
+
+    const swatchRow = new StackPanel();
+    swatchRow.isVertical = false;
+    swatchRow.height = "22px";
+    swatchRow.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_LEFT;
+    row.addControl(swatchRow);
+
+    const swatches: Rectangle[] = [];
+    colors.forEach((color, i) => {
+      const swatch = new Rectangle();
+      swatch.width = "18px";
+      swatch.height = "18px";
+      swatch.background = color;
+      swatch.thickness = i === defaultIdx ? 2 : 1;
+      swatch.color = i === defaultIdx ? "white" : "#333333";
+      swatch.cornerRadius = 2;
+      swatch.onPointerClickObservable.add(() => {
+        swatches.forEach((s, j) => {
+          s.thickness = j === i ? 2 : 1;
+          s.color = j === i ? "white" : "#333333";
+        });
+        onChange(i);
+      });
+      swatches.push(swatch);
+      swatchRow.addControl(swatch);
+    });
+
+    return row;
   }
 
   return scene;

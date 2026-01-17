@@ -1,8 +1,22 @@
 export type UnitType = "tank" | "damage" | "support";
+export type WeaponType = "gun" | "sword";
+
+export interface SupportCustomization {
+  head: number;
+  weapon: WeaponType;
+  skinTone: number;
+  hairColor: number;
+  eyeColor: number;
+}
+
+export interface UnitSelection {
+  type: UnitType;
+  customization?: SupportCustomization;
+}
 
 export interface Loadout {
-  player: UnitType[];
-  enemy: UnitType[];
+  player: UnitSelection[];
+  enemy: UnitSelection[];
 }
 
 export const UNIT_INFO: Record<UnitType, { name: string; hp: number; attack: number; moveRange: number; attackRange: number; description: string }> = {
