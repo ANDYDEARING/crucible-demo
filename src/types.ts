@@ -1,12 +1,15 @@
 export type UnitType = "tank" | "damage" | "support";
 export type WeaponType = "gun" | "sword";
 
+export type BodyType = "male" | "female";
+
 export interface SupportCustomization {
   head: number;
   weapon: WeaponType;
   skinTone: number;
   hairColor: number;
   eyeColor: number;
+  body: BodyType;
 }
 
 export interface UnitSelection {
