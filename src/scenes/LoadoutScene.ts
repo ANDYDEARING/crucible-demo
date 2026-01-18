@@ -124,9 +124,8 @@ export function createLoadoutScene(
 
   // Zoom presets: [radius, targetY]
   const ZOOM_PRESETS = [
-    { radius: 2, targetY: 0.85, name: "Full Body" },
-    { radius: 1.7, targetY: 1.0, name: "Torso & Head" },
-    { radius: 1.5, targetY: 1.3, name: "Face" },
+    { radius: 3, targetY: 0.7, name: "Full Body" },
+    { radius: 1.7, targetY: 1.0, name: "Torso & Head" }
   ];
 
   // Helper to convert hex color to Color3
@@ -273,10 +272,20 @@ export function createLoadoutScene(
     canvas.height = rttSize;
     const ctx = canvas.getContext("2d")!;
 
-    // Create GUI Image - no stretching, natural size
+    // Create GUI Image - fill height, clip width overflow
     const previewImage = new Image(`previewImg_${side}`, "");
-    previewImage.stretch = Image.STRETCH_NONE;
+    previewImage.stretch = Image.STRETCH_FILL;
     previewRect.addControl(previewImage);
+
+    // Size image to match container height (square image, so width = height)
+    const updateImageSize = () => {
+      const h = previewRect.heightInPixels;
+      if (h > 0) {
+        previewImage.widthInPixels = h;
+        previewImage.heightInPixels = h;
+      }
+    };
+    scene.onBeforeRenderObservable.add(updateImageSize);
 
     // Update canvas from RTT after each render (throttled)
     let frameCount = 0;
@@ -531,10 +540,10 @@ export function createLoadoutScene(
     copyArea.verticalAlignment = Control.VERTICAL_ALIGNMENT_TOP;
     customGrid.addControl(copyArea, 0, 1);
 
-    // Right column: Preview area - make it square for sanity check
+    // Right column: Preview area - portrait, image maintains aspect ratio
     const previewArea = new Rectangle();
-    previewArea.width = "200px";
-    previewArea.height = "200px";
+    previewArea.width = "95%";
+    previewArea.height = "95%";
     previewArea.background = "#3a3a4a";
     previewArea.thickness = 1;
     previewArea.color = "#555577";
