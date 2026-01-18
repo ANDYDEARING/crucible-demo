@@ -26,9 +26,33 @@ import {
 import { UNIT_INFO, Loadout, UnitSelection, SupportCustomization, UnitType } from "../types";
 
 // Color palette options
-const SKIN_TONES = ["#FFE0BD", "#FFCD94", "#EAC086", "#D4A373", "#C68642", "#8D5524", "#6B4423", "#4A3728"];
-const HAIR_COLORS = ["#090806", "#2C222B", "#6A4E42", "#B55239", "#DCD0BA", "#E5C8A8", "#977961", "#E8E0D5", "#CC2222", "#22AA44", "#2266DD", "#8833AA"];
-const EYE_COLORS = ["#634E34", "#463320", "#1C7847", "#2E8B57", "#1E90FF", "#4169E1", "#808080", "#000000", "#CC2222", "#8833AA"];
+const SKIN_TONES = [
+  "#FFDFC4", "#F0D5BE", "#E1B899", "#D4A373",  // Light tones
+  "#C68642", "#A57449", "#8D5524",              // Medium
+  "#6B4423", "#4A3728", "#2E1A0E",              // Dark (last matches darkest eye)
+];
+const HAIR_COLORS = [
+  "#0A0A0A",  // Black
+  "#4A3728",  // Brown
+  "#E5C8A8",  // Blond
+  "#B55239",  // Reddish-orange
+  "#C0C0C0",  // Silver
+  "#FF2222",  // Bright red
+  "#FF66AA",  // Bright pink
+  "#9933FF",  // Purple
+  "#22CC44",  // Green
+  "#2288FF",  // Blue
+];
+const EYE_COLORS = [
+  "#2288FF",  // Blue
+  "#22AA44",  // Green
+  "#634E34",  // Brown
+  "#DD2222",  // Red
+  "#9933FF",  // Purple
+  "#FFFFFF",  // White
+  "#0A0A0A",  // Black
+  "#FF8800",  // Orange
+];
 
 export function createLoadoutScene(
   engine: Engine,
@@ -64,20 +88,11 @@ export function createLoadoutScene(
 
   const gui = AdvancedDynamicTexture.CreateFullscreenUI("UI");
 
-  // Title
-  const title = new TextBlock();
-  title.text = "SELECT YOUR UNITS";
-  title.color = "white";
-  title.fontSize = 32;
-  title.top = "-44%";
-  title.fontWeight = "bold";
-  gui.addControl(title);
-
   // Main container (2 columns: Player 1, Player 2)
   const mainGrid = new Grid();
   mainGrid.width = "95%";
-  mainGrid.height = "72%";
-  mainGrid.top = "-2%";
+  mainGrid.height = "82%";
+  mainGrid.top = "-6%";
   mainGrid.addColumnDefinition(0.5);
   mainGrid.addColumnDefinition(0.5);
   mainGrid.addRowDefinition(1);
@@ -119,52 +134,53 @@ export function createLoadoutScene(
   function updatePreview(preview: MedicPreview | undefined, c: SupportCustomization): void {
     if (!preview) return;
 
-    // Update head visibility
+    // Update head visibility (Head_001 through Head_004)
     for (let i = 0; i < 4; i++) {
-      const headMesh = preview.meshes.find(m => m.name === `Head_${i}` || m.name.includes(`Head_${i}`));
-      if (headMesh) {
-        headMesh.setEnabled(i === c.head);
-      }
+      const headName = `Head_00${i + 1}`;
+      const headMeshes = preview.meshes.filter(m => m.name.includes(headName));
+      headMeshes.forEach(mesh => mesh.setEnabled(i === c.head));
     }
 
-    // Update weapon visibility and animation
+    // Update weapon visibility and animation based on combat style
     const swordMeshes = preview.meshes.filter(m => m.name.toLowerCase().includes("sword"));
-    const gunMeshes = preview.meshes.filter(m =>
-      m.name.toLowerCase().includes("pistol") || m.name.toLowerCase().includes("gun")
-    );
+    const pistolMeshes = preview.meshes.filter(m => m.name.toLowerCase().includes("pistol"));
 
-    const useSword = c.weapon === "sword";
-    swordMeshes.forEach(m => m.setEnabled(useSword));
-    gunMeshes.forEach(m => m.setEnabled(!useSword));
+    const isMelee = c.combatStyle === "melee";
+    swordMeshes.forEach(m => m.setEnabled(isMelee));
+    pistolMeshes.forEach(m => m.setEnabled(!isMelee));
 
-    // Switch animation based on weapon
+    // Switch animation based on combat style
     preview.animationGroups.forEach(ag => ag.stop());
-    const idleAnim = useSword
+    const idleAnim = isMelee
       ? preview.animationGroups.find(ag => ag.name === "Idle_Sword")
       : preview.animationGroups.find(ag => ag.name === "Idle_Gun");
     idleAnim?.start(true);
 
-    // Update materials (skin, hair, eyes)
+    // Update materials (skin, hair, eyes) using correct material names
     preview.meshes.forEach(mesh => {
       if (!mesh.material) return;
       const mat = mesh.material as PBRMaterial;
-      const matName = mat.name.toLowerCase();
+      const matName = mat.name;
 
-      if (matName.includes("skin")) {
+      if (matName === "MainSkin") {
         mat.albedoColor = hexToColor3(SKIN_TONES[c.skinTone] || SKIN_TONES[0]);
-      } else if (matName.includes("hair")) {
+      } else if (matName === "MainHair") {
         mat.albedoColor = hexToColor3(HAIR_COLORS[c.hairColor] || HAIR_COLORS[0]);
-      } else if (matName.includes("eye")) {
+      } else if (matName === "MainEye") {
         mat.albedoColor = hexToColor3(EYE_COLORS[c.eyeColor] || EYE_COLORS[0]);
       }
     });
 
-    // Update body - flip model direction for visual differentiation
+    // Handedness - flip X scale (model is reversed by default due to Babylon/Blender axis swap)
+    // Right-handed = flip to correct, Left-handed = keep reversed
     const root = preview.meshes[0];
     if (root) {
-      // Use consistent scale, flip X for female to differentiate
-      root.scaling.x = c.body === "female" ? -0.6 : 0.6;
+      const baseScale = 0.9;
+      root.scaling.x = c.handedness === "right" ? -baseScale : baseScale;
     }
+
+    // Body type stored for future model switching (not implemented yet)
+    // c.body === "male" or "female"
   }
 
   async function createMedicPreview(
@@ -172,8 +188,6 @@ export function createLoadoutScene(
     previewRect: Rectangle,
     _customization: SupportCustomization
   ): Promise<MedicPreview> {
-    console.log(`Loading ${side} medic model...`);
-
     // Position model far away so main camera doesn't see it
     const modelOffset = side === "left" ? -100 : 100;
 
@@ -201,7 +215,6 @@ export function createLoadoutScene(
 
     // Load medic model
     const result = await SceneLoader.ImportMeshAsync("", "/models/", "medic_m.glb", scene);
-    console.log(`${side} model loaded successfully`);
 
     // Use layer mask to hide from main camera (0x0FFFFFFF), only show to preview
     const previewLayer = side === "left" ? 0x10000000 : 0x20000000;
@@ -217,8 +230,6 @@ export function createLoadoutScene(
       m.layerMask = previewLayer;
       rtt.renderList?.push(m);
     });
-
-    console.log(`${side} RTT render list:`, rtt.renderList?.length, "meshes");
 
     // Set team color on TeamMain material
     const teamColor = side === "left"
@@ -410,12 +421,13 @@ export function createLoadoutScene(
 
     // Current customization state
     const currentCustomization: SupportCustomization = {
+      body: "male",
+      combatStyle: "ranged",
+      handedness: "right",
       head: 0,
-      weapon: "gun",
-      skinTone: 2,
       hairColor: 0,
-      eyeColor: 0,
-      body: "male"
+      eyeColor: 2,  // Brown default
+      skinTone: 4,  // Medium skin tone default
     };
 
     // Customization panel (hidden by default) - row 3, fills remaining space
@@ -465,24 +477,32 @@ export function createLoadoutScene(
     optionsCol.verticalAlignment = Control.VERTICAL_ALIGNMENT_TOP;
     customGrid.addControl(optionsCol, 0, 0);
 
+    optionsCol.addControl(createOptionChooser("Body", ["Male", "Female"], 0, (idx) => {
+      currentCustomization.body = idx === 0 ? "male" : "female";
+      updatePreview(previews[side], currentCustomization);
+    }));
     optionsCol.addControl(createOptionChooser("Head", ["1", "2", "3", "4"], 0, (idx) => {
       currentCustomization.head = idx;
       updatePreview(previews[side], currentCustomization);
     }));
-    optionsCol.addControl(createOptionChooser("Weapon", ["Gun", "Sword"], 0, (idx) => {
-      currentCustomization.weapon = idx === 0 ? "gun" : "sword";
+    optionsCol.addControl(createOptionChooser("Style", ["Ranged", "Melee"], 0, (idx) => {
+      currentCustomization.combatStyle = idx === 0 ? "ranged" : "melee";
       updatePreview(previews[side], currentCustomization);
     }));
-    optionsCol.addControl(createColorChooser("Skin", SKIN_TONES, 2, (idx) => {
-      currentCustomization.skinTone = idx;
+    optionsCol.addControl(createOptionChooser("Hand", ["Right", "Left"], 0, (idx) => {
+      currentCustomization.handedness = idx === 0 ? "right" : "left";
       updatePreview(previews[side], currentCustomization);
     }));
     optionsCol.addControl(createColorChooser("Hair", HAIR_COLORS, 0, (idx) => {
       currentCustomization.hairColor = idx;
       updatePreview(previews[side], currentCustomization);
     }));
-    optionsCol.addControl(createColorChooser("Eyes", EYE_COLORS, 0, (idx) => {
+    optionsCol.addControl(createColorChooser("Eyes", EYE_COLORS, 2, (idx) => {
       currentCustomization.eyeColor = idx;
+      updatePreview(previews[side], currentCustomization);
+    }));
+    optionsCol.addControl(createColorChooser("Skin", SKIN_TONES, 4, (idx) => {
+      currentCustomization.skinTone = idx;
       updatePreview(previews[side], currentCustomization);
     }));
 
@@ -521,7 +541,6 @@ export function createLoadoutScene(
         const deltaX = scene.pointerX - lastPointerX;
         previews[side]!.previewCamera.alpha -= deltaX * 0.01;
         lastPointerX = scene.pointerX;
-        console.log(`[${side}] Camera alpha: ${previews[side]!.previewCamera.alpha.toFixed(3)}`);
       }
       if (pointerInfo.type === 2) { // POINTERUP = 2
         isDraggingPreview = false;
@@ -579,6 +598,8 @@ export function createLoadoutScene(
       .then((preview) => {
         previews[side] = preview;
         loadingText.text = "";
+        // Apply initial customization
+        updatePreview(preview, currentCustomization);
       })
       .catch((err) => {
         console.error(`Failed to load ${side} preview:`, err);
@@ -674,7 +695,7 @@ export function createLoadoutScene(
   // Helper: option chooser
   function createOptionChooser(label: string, options: string[], defaultIdx: number, onChange: (idx: number) => void): StackPanel {
     const row = new StackPanel();
-    row.height = "42px";
+    row.height = "44px";
     row.paddingLeft = "3px";
     row.paddingRight = "3px";
 
@@ -695,12 +716,14 @@ export function createLoadoutScene(
     const buttons: Button[] = [];
     options.forEach((opt, i) => {
       const btn = Button.CreateSimpleButton(`opt_${label}_${i}`, opt);
-      btn.width = "28px";
-      btn.height = "20px";
+      btn.width = "50px";
+      btn.height = "22px";
       btn.color = "white";
       btn.background = i === defaultIdx ? "#4488ff" : "#333355";
       btn.cornerRadius = 3;
-      btn.fontSize = 9;
+      btn.fontSize = 10;
+      btn.paddingLeft = "2px";
+      btn.paddingRight = "2px";
       btn.onPointerClickObservable.add(() => {
         buttons.forEach((b, j) => b.background = j === i ? "#4488ff" : "#333355");
         onChange(i);

@@ -2,14 +2,17 @@ export type UnitType = "tank" | "damage" | "support";
 export type WeaponType = "gun" | "sword";
 
 export type BodyType = "male" | "female";
+export type CombatStyle = "melee" | "ranged";
+export type Handedness = "right" | "left";
 
 export interface SupportCustomization {
-  head: number;
-  weapon: WeaponType;
-  skinTone: number;
+  body: BodyType;
+  combatStyle: CombatStyle;
+  handedness: Handedness;
+  head: number;  // 0-3 for Head_001 through Head_004
   hairColor: number;
   eyeColor: number;
-  body: BodyType;
+  skinTone: number;
 }
 
 export interface UnitSelection {
