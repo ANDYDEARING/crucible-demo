@@ -99,7 +99,14 @@ export function createLoadoutScene(
   }
 
   const previews: { left?: MedicPreview; right?: MedicPreview } = {};
-  const RTT_SIZE = 256;
+  const RTT_SIZE = 768;  // Higher resolution for better quality
+
+  // Zoom presets: [radius, targetY]
+  const ZOOM_PRESETS = [
+    { radius: 3.5, targetY: 0.8, name: "Full Body" },
+    { radius: 2.2, targetY: 1.1, name: "Torso & Head" },
+    { radius: 1.4, targetY: 1.5, name: "Face" },
+  ];
 
   // Helper to convert hex color to Color3
   function hexToColor3(hex: string): Color3 {
@@ -175,12 +182,12 @@ export function createLoadoutScene(
     rtt.clearColor = new Color4(0.1, 0.1, 0.15, 1);
     scene.customRenderTargets.push(rtt);
 
-    // === PREVIEW CAMERA SETTINGS - adjust these ===
-    const camAlpha = Math.PI - 0.25;  // Horizontal angle (reduce to turn model left toward camera)
-    const camBeta = Math.PI / 2.5;    // Vertical angle
-    const camRadius = 2.2;            // Distance from model
-    const camTargetY = 0.8;           // Height to look at
-    // =============================================
+    // === PREVIEW CAMERA SETTINGS ===
+    const camAlpha = 4.1;                       // Horizontal angle
+    const camBeta = Math.PI / 2.5;              // Vertical angle
+    const camRadius = ZOOM_PRESETS[0].radius;   // Start at full body
+    const camTargetY = ZOOM_PRESETS[0].targetY;
+    // ================================
 
     const previewCamera = new ArcRotateCamera(
       `previewCam_${side}`,
@@ -247,7 +254,7 @@ export function createLoadoutScene(
     let frameCount = 0;
     rtt.onAfterRenderObservable.add(() => {
       frameCount++;
-      if (frameCount % 6 !== 0) return; // Update every 6th frame (~10fps) for performance
+      if (frameCount % 3 !== 0) return; // Update every 3rd frame (~20fps) for smoother interaction
 
       rtt.readPixels()?.then((buffer) => {
         if (!buffer) return;
@@ -494,6 +501,78 @@ export function createLoadoutScene(
     loadingText.color = "#666688";
     loadingText.fontSize = 12;
     previewArea.addControl(loadingText);
+
+    // Mouse controls for preview - drag to rotate, wheel to zoom
+    let isDraggingPreview = false;
+    let lastPointerX = 0;
+
+    previewArea.onPointerDownObservable.add(() => {
+      isDraggingPreview = true;
+      lastPointerX = scene.pointerX;
+    });
+
+    previewArea.onPointerUpObservable.add(() => {
+      isDraggingPreview = false;
+    });
+
+    // Use scene-level pointer move for smoother tracking
+    scene.onPointerObservable.add((pointerInfo) => {
+      if (isDraggingPreview && previews[side] && pointerInfo.type === 4) { // POINTERMOVE = 4
+        const deltaX = scene.pointerX - lastPointerX;
+        previews[side]!.previewCamera.alpha -= deltaX * 0.01;
+        lastPointerX = scene.pointerX;
+        console.log(`[${side}] Camera alpha: ${previews[side]!.previewCamera.alpha.toFixed(3)}`);
+      }
+      if (pointerInfo.type === 2) { // POINTERUP = 2
+        isDraggingPreview = false;
+      }
+    });
+
+    // Zoom preset cycling with smooth animation
+    let currentZoomIndex = 0;
+    let targetRadius = ZOOM_PRESETS[0].radius;
+    let targetTargetY = ZOOM_PRESETS[0].targetY;
+    let isAnimating = false;
+
+    // Animate camera towards target values
+    scene.onBeforeRenderObservable.add(() => {
+      if (previews[side] && isAnimating) {
+        const cam = previews[side]!.previewCamera;
+        const lerpSpeed = 0.08;
+
+        cam.radius += (targetRadius - cam.radius) * lerpSpeed;
+        cam.target.y += (targetTargetY - cam.target.y) * lerpSpeed;
+
+        // Stop animating when close enough
+        if (Math.abs(cam.radius - targetRadius) < 0.01 && Math.abs(cam.target.y - targetTargetY) < 0.01) {
+          cam.radius = targetRadius;
+          cam.target.y = targetTargetY;
+          isAnimating = false;
+        }
+      }
+    });
+
+    // Wheel to cycle through zoom presets
+    let wheelCooldown = false;
+    previewArea.onWheelObservable.add((evt) => {
+      if (previews[side] && !wheelCooldown) {
+        // Debounce wheel events
+        wheelCooldown = true;
+        setTimeout(() => wheelCooldown = false, 200);
+
+        // Scroll down (positive) = zoom out, scroll up (negative) = zoom in
+        if (evt.y > 0 && currentZoomIndex > 0) {
+          currentZoomIndex--;
+        } else if (evt.y < 0 && currentZoomIndex < ZOOM_PRESETS.length - 1) {
+          currentZoomIndex++;
+        }
+
+        const preset = ZOOM_PRESETS[currentZoomIndex];
+        targetRadius = preset.radius;
+        targetTargetY = preset.targetY;
+        isAnimating = true;
+      }
+    });
 
     // Initialize 3D preview
     createMedicPreview(side, previewArea, currentCustomization)
