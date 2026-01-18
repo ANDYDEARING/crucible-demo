@@ -222,6 +222,16 @@ export function createLoadoutScene(
     );
     rtt.activeCamera = previewCamera;
 
+    // Override camera's aspect ratio calculation to always return 1 (square)
+    const originalGetAspectRatio = previewCamera.getEngine.bind(previewCamera);
+    previewCamera.getEngine = () => {
+      const eng = originalGetAspectRatio();
+      return {
+        ...eng,
+        getAspectRatio: () => 1,  // Force square aspect ratio
+      } as any;
+    };
+
     // Load medic model
     const result = await SceneLoader.ImportMeshAsync("", "/models/", "medic_m.glb", scene);
 
@@ -263,21 +273,10 @@ export function createLoadoutScene(
     canvas.height = rttSize;
     const ctx = canvas.getContext("2d")!;
 
-    // Create GUI Image - square image, no stretching
+    // Create GUI Image - no stretching, natural size
     const previewImage = new Image(`previewImg_${side}`, "");
-    // previewImage.stretch = Image.STRETCH_NONE;
+    previewImage.stretch = Image.STRETCH_NONE;
     previewRect.addControl(previewImage);
-
-    // Size image to fill container height while maintaining aspect ratio
-    // Update on resize using scene observable
-    const updateImageSize = () => {
-      const containerHeight = previewRect.heightInPixels;
-      if (containerHeight > 0) {
-        previewImage.widthInPixels = containerHeight;  // Square, so width = height
-        previewImage.heightInPixels = containerHeight;
-      }
-    };
-    scene.onBeforeRenderObservable.add(updateImageSize);
 
     // Update canvas from RTT after each render (throttled)
     let frameCount = 0;
@@ -532,10 +531,10 @@ export function createLoadoutScene(
     copyArea.verticalAlignment = Control.VERTICAL_ALIGNMENT_TOP;
     customGrid.addControl(copyArea, 0, 1);
 
-    // Right column: Preview area
+    // Right column: Preview area - make it square for sanity check
     const previewArea = new Rectangle();
-    previewArea.width = "95%";
-    previewArea.height = "95%";
+    previewArea.width = "200px";
+    previewArea.height = "200px";
     previewArea.background = "#3a3a4a";
     previewArea.thickness = 1;
     previewArea.color = "#555577";
