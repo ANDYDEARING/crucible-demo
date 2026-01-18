@@ -1,8 +1,28 @@
 export type UnitType = "tank" | "damage" | "support";
+export type WeaponType = "gun" | "sword";
+
+export type BodyType = "male" | "female";
+export type CombatStyle = "melee" | "ranged";
+export type Handedness = "right" | "left";
+
+export interface SupportCustomization {
+  body: BodyType;
+  combatStyle: CombatStyle;
+  handedness: Handedness;
+  head: number;  // 0-3 for Head_001 through Head_004
+  hairColor: number;
+  eyeColor: number;
+  skinTone: number;
+}
+
+export interface UnitSelection {
+  type: UnitType;
+  customization?: SupportCustomization;
+}
 
 export interface Loadout {
-  player: UnitType[];
-  enemy: UnitType[];
+  player: UnitSelection[];
+  enemy: UnitSelection[];
 }
 
 export const UNIT_INFO: Record<UnitType, { name: string; hp: number; attack: number; moveRange: number; attackRange: number; description: string }> = {
@@ -23,7 +43,7 @@ export const UNIT_INFO: Record<UnitType, { name: string; hp: number; attack: num
     description: "Glass cannon. Fast and deadly, but fragile."
   },
   support: {
-    name: "Support",
+    name: "Medic",
     hp: 60,
     attack: 10,
     moveRange: 3,

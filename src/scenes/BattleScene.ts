@@ -10,9 +10,11 @@ import {
   Color3,
   Mesh,
   PointerEventTypes,
+  SceneLoader,
 } from "@babylonjs/core";
+import "@babylonjs/loaders/glTF";
 import { AdvancedDynamicTexture, TextBlock, Button, Rectangle } from "@babylonjs/gui";
-import type { Loadout, UnitType } from "../types";
+import type { Loadout, UnitType, UnitSelection } from "../types";
 
 const GRID_SIZE = 8;
 const TILE_SIZE = 1;
@@ -171,8 +173,11 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
   ];
 
   // Use loadout if provided, otherwise default setup
-  const playerUnits: UnitType[] = loadout?.player ?? ["tank", "damage", "support"];
-  const enemyUnits: UnitType[] = loadout?.enemy ?? ["tank", "damage", "support"];
+  const defaultUnits: UnitSelection[] = [{ type: "tank" }, { type: "damage" }, { type: "support" }];
+  const playerSelections = loadout?.player ?? defaultUnits;
+  const enemySelections = loadout?.enemy ?? defaultUnits;
+  const playerUnits: UnitType[] = playerSelections.map(u => u.type);
+  const enemyUnits: UnitType[] = enemySelections.map(u => u.type);
 
   // Spawn player units
   for (let i = 0; i < playerUnits.length; i++) {
@@ -786,6 +791,88 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
 
   // Initialize the game
   startGame();
+
+  // Test: Load adventurer model with weapon switching
+  SceneLoader.ImportMeshAsync("", "/models/", "AdventurerArmed.glb", scene).then((result) => {
+    console.log("Loaded meshes:", result.meshes.map(m => m.name));
+    console.log("Animations:", result.animationGroups.map(a => a.name));
+
+    // Position the model on the board (center-ish)
+    const root = result.meshes[0];
+    root.position = new Vector3(0, 0.1, 0);
+    root.scaling = new Vector3(0.6, 0.6, 0.6);
+
+    // Find weapon meshes by name (they're part of the model now)
+    const swordMeshes = result.meshes.filter(m => m.name.includes("Sword"));
+    const pistolMeshes = result.meshes.filter(m => m.name.includes("Pistol"));
+
+    console.log("Sword meshes found:", swordMeshes.map(m => m.name));
+    console.log("Pistol meshes found:", pistolMeshes.map(m => m.name));
+
+    // Helper to toggle weapon visibility
+    const showSword = (show: boolean) => {
+      swordMeshes.forEach(m => m.setEnabled(show));
+      pistolMeshes.forEach(m => m.setEnabled(!show));
+    };
+
+    // Start with pistol visible
+    let usingSword = false;
+    showSword(false);
+
+    // Get animations
+    const idleAnim = result.animationGroups.find(ag => ag.name === "Idle_Gun");
+    const swordSlashAnim = result.animationGroups.find(ag => ag.name === "Sword_Slash");
+    const gunShootAnim = result.animationGroups.find(ag => ag.name === "Gun_Shoot");
+
+    // Start with idle
+    result.animationGroups.forEach(ag => ag.stop());
+    idleAnim?.start(true);
+
+    // Toggle handedness on "H" key (default right-handed)
+    let leftHanded = false;
+    root.scaling.x = -0.6; // Start right-handed
+    window.addEventListener("keydown", (e) => {
+      if (e.key === "h" || e.key === "H") {
+        leftHanded = !leftHanded;
+        root.scaling.x = leftHanded ? 0.6 : -0.6;
+      }
+    });
+
+    // Toggle weapon on "T" key
+    window.addEventListener("keydown", (e) => {
+      if (e.key === "t" || e.key === "T") {
+        usingSword = !usingSword;
+        result.animationGroups.forEach(ag => ag.stop());
+
+        if (usingSword) {
+          showSword(true);
+          swordSlashAnim?.start(false); // Play once
+          swordSlashAnim?.onAnimationEndObservable.addOnce(() => {
+            const idleSword = result.animationGroups.find(ag => ag.name === "Idle_Sword");
+            idleSword?.start(true);
+          });
+        } else {
+          showSword(false);
+          gunShootAnim?.start(false); // Play once
+          gunShootAnim?.onAnimationEndObservable.addOnce(() => {
+            idleAnim?.start(true);
+          });
+        }
+      }
+    });
+
+    // Change green to blue for team color
+    result.meshes.forEach(mesh => {
+      if (mesh.material) {
+        const mat = mesh.material as any;
+        if (mat.name === "Green" || mat.name === "LightGreen") {
+          if (mat.albedoColor) {
+            mat.albedoColor = new Color3(0.2, 0.4, 0.9);
+          }
+        }
+      }
+    });
+  });
 
   return scene;
 }

@@ -22,6 +22,7 @@
   "dependencies": {
     "@babylonjs/core": "^8.45.3",
     "@babylonjs/gui": "^8.45.3",
+    "@babylonjs/loaders": "^8.46.2",
     "typescript": "^5.9.3",
     "vite": "^7.3.1"
   }
