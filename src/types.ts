@@ -40,7 +40,7 @@ export const UNIT_INFO: Record<UnitType, { name: string; hp: number; attack: num
     description: "Glass cannon. Fast and deadly, but fragile."
   },
   support: {
-    name: "Support",
+    name: "Medic",
     hp: 60,
     attack: 10,
     moveRange: 3,

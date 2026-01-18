@@ -23,7 +23,7 @@ import {
   Control,
   Image,
 } from "@babylonjs/gui";
-import { UNIT_INFO, Loadout, UnitSelection, SupportCustomization } from "../types";
+import { UNIT_INFO, Loadout, UnitSelection, SupportCustomization, UnitType } from "../types";
 
 // Color palette options
 const SKIN_TONES = ["#FFE0BD", "#FFCD94", "#EAC086", "#D4A373", "#C68642", "#8D5524", "#6B4423", "#4A3728"];
@@ -95,9 +95,11 @@ export function createLoadoutScene(
     animationGroups: AnimationGroup[];
     rtt: RenderTargetTexture;
     previewCamera: ArcRotateCamera;
+    canvas: HTMLCanvasElement;
   }
 
   const previews: { left?: MedicPreview; right?: MedicPreview } = {};
+  const RTT_SIZE = 256;
 
   // Helper to convert hex color to Color3
   function hexToColor3(hex: string): Color3 {
@@ -165,33 +167,117 @@ export function createLoadoutScene(
   ): Promise<MedicPreview> {
     console.log(`Loading ${side} medic model...`);
 
-    // Make the preview rectangle transparent so 3D shows through
-    previewRect.background = "transparent";
-    previewRect.thickness = 0;
+    // Position model far away so main camera doesn't see it
+    const modelOffset = side === "left" ? -100 : 100;
+
+    // Create RTT
+    const rtt = new RenderTargetTexture(`rtt_${side}`, RTT_SIZE, scene, false);
+    rtt.clearColor = new Color4(0.1, 0.1, 0.15, 1);
+    scene.customRenderTargets.push(rtt);
+
+    // === PREVIEW CAMERA SETTINGS - adjust these ===
+    const camAlpha = Math.PI - 0.25;  // Horizontal angle (reduce to turn model left toward camera)
+    const camBeta = Math.PI / 2.5;    // Vertical angle
+    const camRadius = 2.2;            // Distance from model
+    const camTargetY = 0.8;           // Height to look at
+    // =============================================
+
+    const previewCamera = new ArcRotateCamera(
+      `previewCam_${side}`,
+      camAlpha,
+      camBeta,
+      camRadius,
+      new Vector3(modelOffset, camTargetY, 0),
+      scene
+    );
+    rtt.activeCamera = previewCamera;
 
     // Load medic model
     const result = await SceneLoader.ImportMeshAsync("", "/models/", "medic_m.glb", scene);
-
     console.log(`${side} model loaded successfully`);
 
-    // Position models in world space - centered so we can see them
-    // Camera is at arc (π/2, π/2.2, 6) looking at (0, 0.8, 0)
-    const modelX = side === "left" ? -0.5 : 0.5;
+    // Use layer mask to hide from main camera (0x0FFFFFFF), only show to preview
+    const previewLayer = side === "left" ? 0x10000000 : 0x20000000;
+    previewCamera.layerMask = previewLayer;
 
+    // Position model at offset location
     const root = result.meshes[0];
-    root.position = new Vector3(modelX, 0, 0);
-    root.scaling = new Vector3(0.8, 0.8, 0.8);
+    root.position = new Vector3(modelOffset, 0, 0);
+    root.scaling = new Vector3(0.9, 0.9, 0.9);
+
+    // Add meshes to RTT render list and set layer mask
+    result.meshes.forEach(m => {
+      m.layerMask = previewLayer;
+      rtt.renderList?.push(m);
+    });
+
+    console.log(`${side} RTT render list:`, rtt.renderList?.length, "meshes");
+
+    // Set team color on TeamMain material
+    const teamColor = side === "left"
+      ? new Color3(0.2, 0.4, 0.9)   // Blue for player 1
+      : new Color3(0.9, 0.3, 0.2);  // Red for player 2
+
+    result.meshes.forEach(mesh => {
+      if (mesh.material && mesh.material.name === "TeamMain") {
+        const mat = mesh.material as PBRMaterial;
+        mat.albedoColor = teamColor;
+      }
+    });
 
     // Start idle animation
     const idleAnim = result.animationGroups.find(ag => ag.name === "Idle_Gun");
     result.animationGroups.forEach(ag => ag.stop());
     idleAnim?.start(true);
 
+    // Create HTML canvas for displaying RTT in GUI
+    const canvas = document.createElement("canvas");
+    canvas.width = RTT_SIZE;
+    canvas.height = RTT_SIZE;
+    const ctx = canvas.getContext("2d")!;
+
+    // Create GUI Image - will update source via data URL
+    const previewImage = new Image(`previewImg_${side}`, "");
+    previewImage.width = "100%";
+    previewImage.height = "100%";
+    previewImage.stretch = Image.STRETCH_NONE;  // Don't stretch, maintain aspect ratio
+    previewRect.addControl(previewImage);
+
+    // Update canvas from RTT after each render (throttled)
+    let frameCount = 0;
+    rtt.onAfterRenderObservable.add(() => {
+      frameCount++;
+      if (frameCount % 6 !== 0) return; // Update every 6th frame (~10fps) for performance
+
+      rtt.readPixels()?.then((buffer) => {
+        if (!buffer) return;
+        const pixels = new Uint8Array(buffer.buffer);
+        const imageData = ctx.createImageData(RTT_SIZE, RTT_SIZE);
+
+        // RTT pixels are RGBA but may need flipping
+        for (let y = 0; y < RTT_SIZE; y++) {
+          for (let x = 0; x < RTT_SIZE; x++) {
+            const srcIdx = ((RTT_SIZE - 1 - y) * RTT_SIZE + x) * 4; // Flip Y
+            const dstIdx = (y * RTT_SIZE + x) * 4;
+            imageData.data[dstIdx] = pixels[srcIdx];
+            imageData.data[dstIdx + 1] = pixels[srcIdx + 1];
+            imageData.data[dstIdx + 2] = pixels[srcIdx + 2];
+            imageData.data[dstIdx + 3] = pixels[srcIdx + 3];
+          }
+        }
+        ctx.putImageData(imageData, 0, 0);
+
+        // Convert canvas to data URL and set as image source
+        previewImage.source = canvas.toDataURL();
+      });
+    });
+
     const preview: MedicPreview = {
       meshes: result.meshes,
       animationGroups: result.animationGroups,
-      rtt: null as unknown as RenderTargetTexture,
-      previewCamera: null as unknown as ArcRotateCamera,
+      rtt,
+      previewCamera,
+      canvas,
     };
 
     return preview;
@@ -253,122 +339,69 @@ export function createLoadoutScene(
     const panel = new Rectangle();
     panel.width = "98%";
     panel.height = "100%";
-    panel.background = "transparent"; // Transparent so 3D shows through
+    panel.background = "#1a1a2e";
     panel.cornerRadius = 10;
     panel.thickness = 2;
     panel.color = color;
 
-    const container = new StackPanel();
+    // Use Grid for main layout to control row heights
+    const container = new Grid();
     container.width = "95%";
+    container.height = "100%";
+    // Row 0: Player name (35px)
+    // Row 1: Selection display (25px)
+    // Row 2: Class buttons (45px)
+    // Row 3: Customization panel (takes remaining space)
+    // Row 4: Clear button (35px)
+    container.addRowDefinition(35, true);   // Player name - fixed px
+    container.addRowDefinition(25, true);   // Selection - fixed px
+    container.addRowDefinition(45, true);   // Buttons - fixed px
+    container.addRowDefinition(1);          // Custom panel - fill remaining
+    container.addRowDefinition(35, true);   // Clear - fixed px
+    container.addColumnDefinition(1);
     panel.addControl(container);
 
-    // Player name
+    // Player name - centered (row 0)
     const nameText = new TextBlock();
     nameText.text = playerName;
     nameText.color = color;
     nameText.fontSize = 22;
-    nameText.height = "35px";
     nameText.fontWeight = "bold";
-    container.addControl(nameText);
+    nameText.textHorizontalAlignment = Control.HORIZONTAL_ALIGNMENT_CENTER;
+    container.addControl(nameText, 0, 0);
 
-    // Selection display
+    // Selection display - centered, color coded (row 1)
     const selectionDisplay = new TextBlock();
     selectionDisplay.text = "Selected: (choose 3)";
-    selectionDisplay.color = "#888888";
+    selectionDisplay.color = "#ff6666";
     selectionDisplay.fontSize = 13;
-    selectionDisplay.height = "22px";
-    container.addControl(selectionDisplay);
+    selectionDisplay.textHorizontalAlignment = Control.HORIZONTAL_ALIGNMENT_CENTER;
+    container.addControl(selectionDisplay, 1, 0);
 
     const updateSelectionDisplay = (): void => {
       if (selectionArray.length === 0) {
         selectionDisplay.text = "Selected: (choose 3)";
-        selectionDisplay.color = "#888888";
+        selectionDisplay.color = "#ff6666";
       } else {
         const names = selectionArray.map(u => UNIT_INFO[u.type].name);
         selectionDisplay.text = `Selected: ${names.join(", ")}`;
-        selectionDisplay.color = selectionArray.length === 3 ? "#44ff44" : "white";
+        selectionDisplay.color = selectionArray.length === 3 ? "#44ff44" : "#ff6666";
       }
     };
 
-    // Tank button
-    const tankBtn = Button.CreateSimpleButton(`${playerName}_tank`, "+ Tank");
-    tankBtn.width = "100%";
-    tankBtn.height = "35px";
-    tankBtn.color = "white";
-    tankBtn.background = "#333355";
-    tankBtn.cornerRadius = 5;
-    tankBtn.paddingTop = "2px";
-    tankBtn.paddingBottom = "2px";
-    tankBtn.onPointerEnterObservable.add(() => {
-      const info = UNIT_INFO.tank;
-      infoText.text = `${info.name}: HP ${info.hp} | ATK ${info.attack} | Move ${info.moveRange} | Range ${info.attackRange}`;
-      infoText.color = "white";
-    });
-    tankBtn.onPointerOutObservable.add(() => {
-      infoText.text = "Hover over a unit type to see stats";
-      infoText.color = "#888888";
-    });
-    tankBtn.onPointerClickObservable.add(() => {
-      if (selectionArray.length < 3) {
-        selectionArray.push({ type: "tank" });
-        updateSelectionDisplay();
-        updateStartButton();
-      }
-    });
-    container.addControl(tankBtn);
+    // Class buttons row - spread across using Grid (row 2)
+    const classButtonRow = new Grid();
+    classButtonRow.width = "100%";
+    classButtonRow.addColumnDefinition(1/3);
+    classButtonRow.addColumnDefinition(1/3);
+    classButtonRow.addColumnDefinition(1/3);
+    classButtonRow.addRowDefinition(1);
+    container.addControl(classButtonRow, 2, 0);
 
-    // Damage button
-    const damageBtn = Button.CreateSimpleButton(`${playerName}_damage`, "+ Damage");
-    damageBtn.width = "100%";
-    damageBtn.height = "35px";
-    damageBtn.color = "white";
-    damageBtn.background = "#333355";
-    damageBtn.cornerRadius = 5;
-    damageBtn.paddingTop = "2px";
-    damageBtn.paddingBottom = "2px";
-    damageBtn.onPointerEnterObservable.add(() => {
-      const info = UNIT_INFO.damage;
-      infoText.text = `${info.name}: HP ${info.hp} | ATK ${info.attack} | Move ${info.moveRange} | Range ${info.attackRange}`;
-      infoText.color = "white";
-    });
-    damageBtn.onPointerOutObservable.add(() => {
-      infoText.text = "Hover over a unit type to see stats";
-      infoText.color = "#888888";
-    });
-    damageBtn.onPointerClickObservable.add(() => {
-      if (selectionArray.length < 3) {
-        selectionArray.push({ type: "damage" });
-        updateSelectionDisplay();
-        updateStartButton();
-      }
-    });
-    container.addControl(damageBtn);
+    // Track which class is currently selected for customization
+    let selectedClass: UnitType | null = null;
 
-    // === SUPPORT PANEL with 3 internal columns ===
-    const supportPanel = new Rectangle();
-    supportPanel.width = "100%";
-    supportPanel.height = "220px";
-    supportPanel.background = "transparent"; // Transparent so preview shows through
-    supportPanel.cornerRadius = 5;
-    supportPanel.thickness = 1;
-    supportPanel.color = "#555588";
-    supportPanel.paddingTop = "3px";
-    container.addControl(supportPanel);
-
-    const supportContainer = new StackPanel();
-    supportContainer.width = "98%";
-    supportPanel.addControl(supportContainer);
-
-    // Support title
-    const supportTitle = new TextBlock();
-    supportTitle.text = "SUPPORT (Medic)";
-    supportTitle.color = "#88ff88";
-    supportTitle.fontSize = 14;
-    supportTitle.height = "22px";
-    supportTitle.fontWeight = "bold";
-    supportContainer.addControl(supportTitle);
-
-    // Current customization
+    // Current customization state
     const currentCustomization: SupportCustomization = {
       head: 0,
       weapon: "gun",
@@ -378,97 +411,95 @@ export function createLoadoutScene(
       body: "male"
     };
 
-    // 3-column grid: Options Col1, Options Col2, Preview
-    const innerGrid = new Grid();
-    innerGrid.width = "100%";
-    innerGrid.height = "150px";
-    innerGrid.addColumnDefinition(0.33);
-    innerGrid.addColumnDefinition(0.33);
-    innerGrid.addColumnDefinition(0.34);
-    innerGrid.addRowDefinition(1);
-    supportContainer.addControl(innerGrid);
+    // Customization panel (hidden by default) - row 3, fills remaining space
+    const customPanel = new Rectangle();
+    customPanel.width = "100%";
+    customPanel.height = "100%";
+    customPanel.background = "#2a2a4e";
+    customPanel.cornerRadius = 5;
+    customPanel.thickness = 1;
+    customPanel.color = "#555588";
+    customPanel.isVisible = false;
+    container.addControl(customPanel, 3, 0);
 
-    // Column 1: Head, Skin, Eyes
-    const col1Bg = new Rectangle();
-    col1Bg.background = "#2a2a4e";
-    col1Bg.thickness = 0;
-    innerGrid.addControl(col1Bg, 0, 0);
+    // Use Grid for customization panel layout
+    const customContainer = new Grid();
+    customContainer.width = "98%";
+    customContainer.height = "100%";
+    customContainer.addRowDefinition(0.12);  // Title - 12%
+    customContainer.addRowDefinition(0.72);  // Options + Preview - 72%
+    customContainer.addRowDefinition(0.16);  // Add button - 16%
+    customContainer.addColumnDefinition(1);
+    customPanel.addControl(customContainer);
 
-    const col1 = new StackPanel();
-    col1.width = "100%";
-    col1Bg.addControl(col1);
+    // Class title in customization panel (row 0)
+    const classTitle = new TextBlock();
+    classTitle.text = "";
+    classTitle.color = "#88ff88";
+    classTitle.fontSize = 16;
+    classTitle.fontWeight = "bold";
+    classTitle.textHorizontalAlignment = Control.HORIZONTAL_ALIGNMENT_CENTER;
+    customContainer.addControl(classTitle, 0, 0);
 
-    // We'll define updatePreviewText before the choosers so they can call it
-    let updatePreviewText: () => void;
+    // Two-column grid: Customizations | Preview (row 1)
+    const customGrid = new Grid();
+    customGrid.width = "100%";
+    customGrid.height = "100%";
+    customGrid.verticalAlignment = Control.VERTICAL_ALIGNMENT_STRETCH;
+    customGrid.addColumnDefinition(0.4);
+    customGrid.addColumnDefinition(0.6);  // Wider preview
+    customGrid.addRowDefinition(1);
+    customContainer.addControl(customGrid, 1, 0);
 
-    col1.addControl(createOptionChooser("Head", ["1", "2", "3", "4"], 0, (idx) => {
+    // Left column: Customization options
+    const optionsCol = new StackPanel();
+    optionsCol.width = "100%";
+    optionsCol.height = "100%";
+    optionsCol.verticalAlignment = Control.VERTICAL_ALIGNMENT_TOP;
+    customGrid.addControl(optionsCol, 0, 0);
+
+    optionsCol.addControl(createOptionChooser("Head", ["1", "2", "3", "4"], 0, (idx) => {
       currentCustomization.head = idx;
       updatePreview(previews[side], currentCustomization);
-      updatePreviewText?.();
     }));
-    col1.addControl(createColorChooser("Skin", SKIN_TONES, 2, (idx) => {
+    optionsCol.addControl(createOptionChooser("Weapon", ["Gun", "Sword"], 0, (idx) => {
+      currentCustomization.weapon = idx === 0 ? "gun" : "sword";
+      updatePreview(previews[side], currentCustomization);
+    }));
+    optionsCol.addControl(createColorChooser("Skin", SKIN_TONES, 2, (idx) => {
       currentCustomization.skinTone = idx;
       updatePreview(previews[side], currentCustomization);
     }));
-    col1.addControl(createColorChooser("Eyes", EYE_COLORS, 0, (idx) => {
+    optionsCol.addControl(createColorChooser("Hair", HAIR_COLORS, 0, (idx) => {
+      currentCustomization.hairColor = idx;
+      updatePreview(previews[side], currentCustomization);
+    }));
+    optionsCol.addControl(createColorChooser("Eyes", EYE_COLORS, 0, (idx) => {
       currentCustomization.eyeColor = idx;
       updatePreview(previews[side], currentCustomization);
     }));
 
-    // Column 2: Weapon, Hair, Body
-    const col2Bg = new Rectangle();
-    col2Bg.background = "#2a2a4e";
-    col2Bg.thickness = 0;
-    innerGrid.addControl(col2Bg, 0, 1);
-
-    const col2 = new StackPanel();
-    col2.width = "100%";
-    col2Bg.addControl(col2);
-
-    col2.addControl(createOptionChooser("Weapon", ["Gun", "Sword"], 0, (idx) => {
-      currentCustomization.weapon = idx === 0 ? "gun" : "sword";
-      updatePreview(previews[side], currentCustomization);
-      updatePreviewText?.();
-    }));
-    col2.addControl(createColorChooser("Hair", HAIR_COLORS, 0, (idx) => {
-      currentCustomization.hairColor = idx;
-      updatePreview(previews[side], currentCustomization);
-    }));
-    col2.addControl(createOptionChooser("Body", ["M", "F"], 0, (idx) => {
-      currentCustomization.body = idx === 0 ? "male" : "female";
-      updatePreview(previews[side], currentCustomization);
-      updatePreviewText?.();
-    }));
-
-    // Column 3: 3D Preview area
+    // Right column: Preview area
     const previewArea = new Rectangle();
-    previewArea.width = "100%";
-    previewArea.height = "100%";
-    previewArea.background = "#222244";
+    previewArea.width = "95%";
+    previewArea.height = "95%";
+    previewArea.background = "#181830";
     previewArea.thickness = 1;
     previewArea.color = "#444466";
     previewArea.cornerRadius = 5;
-    innerGrid.addControl(previewArea, 0, 2);
+    customGrid.addControl(previewArea, 0, 1);
 
-    const previewLabel = new TextBlock();
-    previewLabel.text = "Preview";
-    previewLabel.color = "#888899";
-    previewLabel.fontSize = 9;
-    previewLabel.top = "-42%";
-    previewArea.addControl(previewLabel);
-
-    // Loading indicator while model loads
     const loadingText = new TextBlock();
     loadingText.text = "Loading...";
     loadingText.color = "#666688";
-    loadingText.fontSize = 10;
+    loadingText.fontSize = 12;
     previewArea.addControl(loadingText);
 
-    // Initialize 3D preview asynchronously
+    // Initialize 3D preview
     createMedicPreview(side, previewArea, currentCustomization)
       .then((preview) => {
         previews[side] = preview;
-        loadingText.text = ""; // Hide loading text
+        loadingText.text = "";
       })
       .catch((err) => {
         console.error(`Failed to load ${side} preview:`, err);
@@ -476,52 +507,87 @@ export function createLoadoutScene(
         loadingText.color = "#ff4444";
       });
 
-    // No-op for backwards compatibility with chooser callbacks
-    updatePreviewText = (): void => {};
-
-    // +Add Medic button
-    const addBtn = Button.CreateSimpleButton(`${playerName}_addSupport`, "+ Add Medic");
-    addBtn.width = "100%";
-    addBtn.height = "35px";
+    // Add button at bottom of customization panel (row 2)
+    const addBtn = Button.CreateSimpleButton(`${playerName}_add`, "+ Add");
+    addBtn.width = "95%";
+    addBtn.height = "80%";
+    addBtn.verticalAlignment = Control.VERTICAL_ALIGNMENT_CENTER;
     addBtn.color = "white";
     addBtn.background = "#338833";
     addBtn.cornerRadius = 5;
     addBtn.fontSize = 14;
     addBtn.fontWeight = "bold";
-    addBtn.onPointerEnterObservable.add(() => {
-      const info = UNIT_INFO.support;
-      infoText.text = `${info.name}: HP ${info.hp} | ATK ${info.attack} | Range ${info.attackRange} - ${info.description}`;
-      infoText.color = "white";
-      addBtn.background = "#44aa44";
-    });
-    addBtn.onPointerOutObservable.add(() => {
-      infoText.text = "Hover over a unit type to see stats";
-      infoText.color = "#888888";
-      addBtn.background = "#338833";
-    });
     addBtn.onPointerClickObservable.add(() => {
-      if (selectionArray.length < 3) {
-        selectionArray.push({ type: "support", customization: { ...currentCustomization } });
+      if (selectionArray.length < 3 && selectedClass) {
+        selectionArray.push({
+          type: selectedClass,
+          customization: selectedClass === "support" ? { ...currentCustomization } : undefined
+        });
         updateSelectionDisplay();
         updateStartButton();
+        // Close customization panel after adding
+        customPanel.isVisible = false;
+        selectedClass = null;
       }
     });
-    supportContainer.addControl(addBtn);
+    customContainer.addControl(addBtn, 2, 0);
 
-    // Clear button
+    // Function to open customization for a class
+    const openCustomization = (classType: UnitType): void => {
+      selectedClass = classType;
+      const info = UNIT_INFO[classType];
+      classTitle.text = info.name.toUpperCase();
+      // Update button text through textBlock property
+      const btnText = addBtn.textBlock;
+      if (btnText) btnText.text = `+ Add ${info.name}`;
+      customPanel.isVisible = true;
+    };
+
+    // Create class buttons
+    const classTypes: UnitType[] = ["tank", "damage", "support"];
+    const classButtons: Button[] = [];
+
+    classTypes.forEach((classType, index) => {
+      const btn = Button.CreateSimpleButton(`${playerName}_${classType}`, UNIT_INFO[classType].name);
+      btn.width = "95%";
+      btn.height = "35px";
+      btn.color = "white";
+      btn.background = "#333355";
+      btn.cornerRadius = 5;
+      btn.fontSize = 13;
+      btn.onPointerEnterObservable.add(() => {
+        const info = UNIT_INFO[classType];
+        infoText.text = `${info.name}: HP ${info.hp} | ATK ${info.attack} | Move ${info.moveRange} | Range ${info.attackRange}`;
+        infoText.color = "white";
+      });
+      btn.onPointerOutObservable.add(() => {
+        infoText.text = "Hover over a unit type to see stats";
+        infoText.color = "#888888";
+      });
+      btn.onPointerClickObservable.add(() => {
+        if (selectionArray.length < 3) {
+          openCustomization(classType);
+        }
+      });
+      classButtons.push(btn);
+      classButtonRow.addControl(btn, 0, index);  // Add to specific column
+    });
+
+    // Clear button (row 4)
     const clearBtn = Button.CreateSimpleButton(`${playerName}_clear`, "Clear All");
     clearBtn.width = "100%";
-    clearBtn.height = "28px";
+    clearBtn.height = "100%";
     clearBtn.color = "#ff6666";
     clearBtn.background = "#442222";
     clearBtn.cornerRadius = 5;
-    clearBtn.paddingTop = "3px";
     clearBtn.onPointerClickObservable.add(() => {
       selectionArray.length = 0;
       updateSelectionDisplay();
       updateStartButton();
+      customPanel.isVisible = false;
+      selectedClass = null;
     });
-    container.addControl(clearBtn);
+    container.addControl(clearBtn, 4, 0);
 
     return panel;
   }
