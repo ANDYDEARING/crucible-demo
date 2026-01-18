@@ -121,13 +121,12 @@ export function createLoadoutScene(
   }
 
   const previews: { left?: MedicPreview; right?: MedicPreview } = {};
-  const RTT_SIZE = 768;  // Higher resolution for better quality
 
   // Zoom presets: [radius, targetY]
   const ZOOM_PRESETS = [
-    { radius: 3.5, targetY: 0.8, name: "Full Body" },
-    { radius: 2.2, targetY: 1.1, name: "Torso & Head" },
-    { radius: 1.4, targetY: 1.5, name: "Face" },
+    { radius: 2, targetY: 0.85, name: "Full Body" },
+    { radius: 1.7, targetY: 1.0, name: "Torso & Head" },
+    { radius: 1.5, targetY: 1.3, name: "Face" },
   ];
 
   // Helper to convert hex color to Color3
@@ -198,9 +197,12 @@ export function createLoadoutScene(
     // Position model far away so main camera doesn't see it
     const modelOffset = side === "left" ? -100 : 100;
 
-    // Create RTT
-    const rtt = new RenderTargetTexture(`rtt_${side}`, RTT_SIZE, scene, false);
-    rtt.clearColor = new Color4(0.1, 0.1, 0.15, 1);
+    // Use square RTT - image will be sized to fill height and clip width
+    const rttSize = 768;
+
+    // Create square RTT
+    const rtt = new RenderTargetTexture(`rtt_${side}`, rttSize, scene, false);
+    rtt.clearColor = new Color4(0.3, 0.32, 0.38, 1);  // Lighter background to see dark elements
     scene.customRenderTargets.push(rtt);
 
     // === PREVIEW CAMERA SETTINGS ===
@@ -257,16 +259,25 @@ export function createLoadoutScene(
 
     // Create HTML canvas for displaying RTT in GUI
     const canvas = document.createElement("canvas");
-    canvas.width = RTT_SIZE;
-    canvas.height = RTT_SIZE;
+    canvas.width = rttSize;
+    canvas.height = rttSize;
     const ctx = canvas.getContext("2d")!;
 
-    // Create GUI Image - will update source via data URL
+    // Create GUI Image - square image, no stretching
     const previewImage = new Image(`previewImg_${side}`, "");
-    previewImage.width = "100%";
-    previewImage.height = "100%";
-    previewImage.stretch = Image.STRETCH_NONE;  // Don't stretch, maintain aspect ratio
+    // previewImage.stretch = Image.STRETCH_NONE;
     previewRect.addControl(previewImage);
+
+    // Size image to fill container height while maintaining aspect ratio
+    // Update on resize using scene observable
+    const updateImageSize = () => {
+      const containerHeight = previewRect.heightInPixels;
+      if (containerHeight > 0) {
+        previewImage.widthInPixels = containerHeight;  // Square, so width = height
+        previewImage.heightInPixels = containerHeight;
+      }
+    };
+    scene.onBeforeRenderObservable.add(updateImageSize);
 
     // Update canvas from RTT after each render (throttled)
     let frameCount = 0;
@@ -277,13 +288,13 @@ export function createLoadoutScene(
       rtt.readPixels()?.then((buffer) => {
         if (!buffer) return;
         const pixels = new Uint8Array(buffer.buffer);
-        const imageData = ctx.createImageData(RTT_SIZE, RTT_SIZE);
+        const imageData = ctx.createImageData(rttSize, rttSize);
 
         // RTT pixels are RGBA but may need flipping
-        for (let y = 0; y < RTT_SIZE; y++) {
-          for (let x = 0; x < RTT_SIZE; x++) {
-            const srcIdx = ((RTT_SIZE - 1 - y) * RTT_SIZE + x) * 4; // Flip Y
-            const dstIdx = (y * RTT_SIZE + x) * 4;
+        for (let y = 0; y < rttSize; y++) {
+          for (let x = 0; x < rttSize; x++) {
+            const srcIdx = ((rttSize - 1 - y) * rttSize + x) * 4; // Flip Y
+            const dstIdx = (y * rttSize + x) * 4;
             imageData.data[dstIdx] = pixels[srcIdx];
             imageData.data[dstIdx + 1] = pixels[srcIdx + 1];
             imageData.data[dstIdx + 2] = pixels[srcIdx + 2];
@@ -467,13 +478,14 @@ export function createLoadoutScene(
     classTitle.textHorizontalAlignment = Control.HORIZONTAL_ALIGNMENT_CENTER;
     customContainer.addControl(classTitle, 0, 0);
 
-    // Two-column grid: Customizations | Preview (row 1)
+    // Three-column grid: Options | Copy | Preview (row 1)
     const customGrid = new Grid();
     customGrid.width = "100%";
     customGrid.height = "100%";
     customGrid.verticalAlignment = Control.VERTICAL_ALIGNMENT_STRETCH;
-    customGrid.addColumnDefinition(0.4);
-    customGrid.addColumnDefinition(0.6);  // Wider preview
+    customGrid.addColumnDefinition(0.4);   // Options
+    customGrid.addColumnDefinition(0.3);   // Copy/stats area
+    customGrid.addColumnDefinition(0.3);   // Preview (50% of previous)
     customGrid.addRowDefinition(1);
     customContainer.addControl(customGrid, 1, 0);
 
@@ -513,15 +525,22 @@ export function createLoadoutScene(
       updatePreview(previews[side], currentCustomization);
     }));
 
+    // Middle column: Copy/stats area (placeholder for now)
+    const copyArea = new StackPanel();
+    copyArea.width = "95%";
+    copyArea.height = "100%";
+    copyArea.verticalAlignment = Control.VERTICAL_ALIGNMENT_TOP;
+    customGrid.addControl(copyArea, 0, 1);
+
     // Right column: Preview area
     const previewArea = new Rectangle();
     previewArea.width = "95%";
     previewArea.height = "95%";
-    previewArea.background = "#181830";
+    previewArea.background = "#3a3a4a";
     previewArea.thickness = 1;
-    previewArea.color = "#444466";
+    previewArea.color = "#555577";
     previewArea.cornerRadius = 5;
-    customGrid.addControl(previewArea, 0, 1);
+    customGrid.addControl(previewArea, 0, 2);
 
     const loadingText = new TextBlock();
     loadingText.text = "Loading...";
