@@ -30,7 +30,7 @@ export function createTitleScene(
   scene.clearColor = new Color4(0.02, 0.01, 0.01, 1);
 
   // Background music
-  const music = new Audio("/audio/rise-above.m4a");
+  const music = new Audio("/audio/rise-above-clumsy-loop.m4a");
   music.loop = true;
   music.volume = 0.5;
   music.addEventListener("timeupdate", () => {
@@ -40,9 +40,20 @@ export function createTitleScene(
   });
   music.play();
 
+  // Press S to skip to 10 seconds before end (to test loop)
+  const skipHandler = (e: KeyboardEvent) => {
+    if (e.key === "s" || e.key === "S") {
+      if (music.duration) {
+        music.currentTime = Math.max(0, music.duration - 10);
+      }
+    }
+  };
+  window.addEventListener("keydown", skipHandler);
+
   scene.onDisposeObservable.add(() => {
     music.pause();
     music.src = "";
+    window.removeEventListener("keydown", skipHandler);
   });
 
   new FreeCamera("camera", Vector3.Zero(), scene);

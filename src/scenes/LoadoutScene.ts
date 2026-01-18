@@ -70,7 +70,7 @@ export function createLoadoutScene(
   scene.clearColor = new Color4(0.08, 0.08, 0.12, 1);
 
   // Loadout music
-  const music = new Audio("/audio/wowchapter1.m4a");
+  const music = new Audio("/audio/Loadout.m4a");
   music.loop = true;
   music.volume = 0.5;
   music.addEventListener("timeupdate", () => {
@@ -79,6 +79,19 @@ export function createLoadoutScene(
     }
   });
   music.play();
+
+  // Press S to skip to 10 seconds before end (to test loop)
+  const skipHandler = (e: KeyboardEvent) => {
+    if (e.key === "s" || e.key === "S") {
+      if (music.duration) {
+        music.currentTime = Math.max(0, music.duration - 10);
+      }
+    }
+  };
+  window.addEventListener("keydown", skipHandler);
+  scene.onDisposeObservable.add(() => {
+    window.removeEventListener("keydown", skipHandler);
+  });
 
   scene.onDisposeObservable.add(() => {
     music.pause();
