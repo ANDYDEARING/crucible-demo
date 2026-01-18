@@ -27,9 +27,16 @@ import { UNIT_INFO, Loadout, UnitSelection, SupportCustomization, UnitType } fro
 
 // Color palette options
 const SKIN_TONES = [
-  "#FFDFC4", "#F0D5BE", "#E1B899", "#D4A373",  // Light tones
-  "#C68642", "#A57449", "#8D5524",              // Medium
-  "#6B4423", "#4A3728", "#2E1A0E",              // Dark (last matches darkest eye)
+  "#FFDFC4",  // Light
+  "#E8C0A0",
+  "#D0A080",
+  "#B08060",
+  "#906040",
+  "#704828",
+  "#503418",
+  "#352210",
+  "#1E1208",
+  "#0A0604",  // Near black
 ];
 const HAIR_COLORS = [
   "#0A0A0A",  // Black
