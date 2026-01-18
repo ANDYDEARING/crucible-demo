@@ -486,59 +486,93 @@ export function createLoadoutScene(
     classTitle.textHorizontalAlignment = Control.HORIZONTAL_ALIGNMENT_CENTER;
     customContainer.addControl(classTitle, 0, 0);
 
-    // Three-column grid: Options | Copy | Preview (row 1)
+    // Two-column grid: Options+Copy | Preview (row 1)
     const customGrid = new Grid();
     customGrid.width = "100%";
     customGrid.height = "100%";
     customGrid.verticalAlignment = Control.VERTICAL_ALIGNMENT_STRETCH;
-    customGrid.addColumnDefinition(0.4);   // Options
-    customGrid.addColumnDefinition(0.3);   // Copy/stats area
-    customGrid.addColumnDefinition(0.3);   // Preview (50% of previous)
+    customGrid.addColumnDefinition(0.7);   // Options + Copy
+    customGrid.addColumnDefinition(0.3);   // Preview
     customGrid.addRowDefinition(1);
     customContainer.addControl(customGrid, 1, 0);
 
-    // Left column: Customization options
-    const optionsCol = new StackPanel();
+    // Left column: Controls (2 columns) + Copy text below
+    const optionsCol = new Grid();
     optionsCol.width = "100%";
     optionsCol.height = "100%";
-    optionsCol.verticalAlignment = Control.VERTICAL_ALIGNMENT_TOP;
+    optionsCol.addRowDefinition(0.6);  // Controls area
+    optionsCol.addRowDefinition(0.4);  // Copy text area
+    optionsCol.addColumnDefinition(1);
     customGrid.addControl(optionsCol, 0, 0);
 
-    optionsCol.addControl(createOptionChooser("Body", ["Male", "Female"], 0, (idx) => {
+    // Two-column grid for controls
+    const controlsGrid = new Grid();
+    controlsGrid.width = "100%";
+    controlsGrid.height = "100%";
+    controlsGrid.addColumnDefinition(0.5);
+    controlsGrid.addColumnDefinition(0.5);
+    controlsGrid.addRowDefinition(0.25);
+    controlsGrid.addRowDefinition(0.25);
+    controlsGrid.addRowDefinition(0.25);
+    controlsGrid.addRowDefinition(0.25);
+    optionsCol.addControl(controlsGrid, 0, 0);
+
+    // Left column controls
+    const bodyChooser = createOptionChooser("Body", ["Male", "Female"], 0, (idx) => {
       currentCustomization.body = idx === 0 ? "male" : "female";
       updatePreview(previews[side], currentCustomization);
-    }));
-    optionsCol.addControl(createOptionChooser("Head", ["1", "2", "3", "4"], 0, (idx) => {
+    });
+    controlsGrid.addControl(bodyChooser, 0, 0);
+
+    const headChooser = createOptionChooser("Head", ["1", "2", "3", "4"], 0, (idx) => {
       currentCustomization.head = idx;
       updatePreview(previews[side], currentCustomization);
-    }));
-    optionsCol.addControl(createOptionChooser("Style", ["Ranged", "Melee"], 0, (idx) => {
+    });
+    controlsGrid.addControl(headChooser, 1, 0);
+
+    const styleChooser = createOptionChooser("Style", ["Ranged", "Melee"], 0, (idx) => {
       currentCustomization.combatStyle = idx === 0 ? "ranged" : "melee";
       updatePreview(previews[side], currentCustomization);
-    }));
-    optionsCol.addControl(createOptionChooser("Hand", ["Right", "Left"], 0, (idx) => {
+    });
+    controlsGrid.addControl(styleChooser, 2, 0);
+
+    const handChooser = createOptionChooser("Hand", ["Right", "Left"], 0, (idx) => {
       currentCustomization.handedness = idx === 0 ? "right" : "left";
       updatePreview(previews[side], currentCustomization);
-    }));
-    optionsCol.addControl(createColorChooser("Hair", HAIR_COLORS, 0, (idx) => {
+    });
+    controlsGrid.addControl(handChooser, 3, 0);
+
+    // Right column controls
+    const hairChooser = createColorChooser("Hair", HAIR_COLORS, 0, (idx) => {
       currentCustomization.hairColor = idx;
       updatePreview(previews[side], currentCustomization);
-    }));
-    optionsCol.addControl(createColorChooser("Eyes", EYE_COLORS, 2, (idx) => {
+    });
+    controlsGrid.addControl(hairChooser, 0, 1);
+
+    const eyesChooser = createColorChooser("Eyes", EYE_COLORS, 2, (idx) => {
       currentCustomization.eyeColor = idx;
       updatePreview(previews[side], currentCustomization);
-    }));
-    optionsCol.addControl(createColorChooser("Skin", SKIN_TONES, 4, (idx) => {
+    });
+    controlsGrid.addControl(eyesChooser, 1, 1);
+
+    const skinChooser = createColorChooser("Skin", SKIN_TONES, 4, (idx) => {
       currentCustomization.skinTone = idx;
       updatePreview(previews[side], currentCustomization);
-    }));
+    });
+    controlsGrid.addControl(skinChooser, 2, 1);
 
-    // Middle column: Copy/stats area (placeholder for now)
-    const copyArea = new StackPanel();
-    copyArea.width = "95%";
-    copyArea.height = "100%";
-    copyArea.verticalAlignment = Control.VERTICAL_ALIGNMENT_TOP;
-    customGrid.addControl(copyArea, 0, 1);
+    // Copy text below controls
+    const descriptionText = new TextBlock();
+    descriptionText.text = "Lorem ipsum dolor sit amet, consectetur adipiscing elit. Sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat.";
+    descriptionText.color = "#999999";
+    descriptionText.fontSize = 11;
+    descriptionText.textWrapping = true;
+    descriptionText.textHorizontalAlignment = Control.HORIZONTAL_ALIGNMENT_LEFT;
+    descriptionText.textVerticalAlignment = Control.VERTICAL_ALIGNMENT_TOP;
+    descriptionText.paddingTop = "10px";
+    descriptionText.paddingLeft = "5px";
+    descriptionText.paddingRight = "5px";
+    optionsCol.addControl(descriptionText, 1, 0);
 
     // Right column: Preview area - portrait, image maintains aspect ratio
     const previewArea = new Rectangle();
@@ -548,7 +582,7 @@ export function createLoadoutScene(
     previewArea.thickness = 1;
     previewArea.color = "#555577";
     previewArea.cornerRadius = 5;
-    customGrid.addControl(previewArea, 0, 2);
+    customGrid.addControl(previewArea, 0, 1);
 
     const loadingText = new TextBlock();
     loadingText.text = "Loading...";
