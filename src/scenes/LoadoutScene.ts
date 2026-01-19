@@ -125,9 +125,15 @@ export function createLoadoutScene(
   };
 
   // 3D Preview system using RTT
-  interface MedicPreview {
+  interface ModelData {
     meshes: AbstractMesh[];
     animationGroups: AnimationGroup[];
+    root: AbstractMesh;
+  }
+
+  interface MedicPreview {
+    male: ModelData;
+    female: ModelData;
     rtt: RenderTargetTexture;
     previewCamera: ArcRotateCamera;
     canvas: HTMLCanvasElement;
@@ -152,30 +158,42 @@ export function createLoadoutScene(
   function updatePreview(preview: MedicPreview | undefined, c: SupportCustomization): void {
     if (!preview) return;
 
+    // Show/hide based on body type
+    const isMale = c.body === "male";
+    const activeModel = isMale ? preview.male : preview.female;
+    const inactiveModel = isMale ? preview.female : preview.male;
+
+    // Hide inactive model, show active
+    inactiveModel.root.setEnabled(false);
+    activeModel.root.setEnabled(true);
+
+    // Stop inactive animations
+    inactiveModel.animationGroups.forEach(ag => ag.stop());
+
     // Update head visibility (Head_001 through Head_004)
     for (let i = 0; i < 4; i++) {
       const headName = `Head_00${i + 1}`;
-      const headMeshes = preview.meshes.filter(m => m.name.includes(headName));
+      const headMeshes = activeModel.meshes.filter(m => m.name.includes(headName));
       headMeshes.forEach(mesh => mesh.setEnabled(i === c.head));
     }
 
     // Update weapon visibility and animation based on combat style
-    const swordMeshes = preview.meshes.filter(m => m.name.toLowerCase().includes("sword"));
-    const pistolMeshes = preview.meshes.filter(m => m.name.toLowerCase().includes("pistol"));
+    const swordMeshes = activeModel.meshes.filter(m => m.name.toLowerCase().includes("sword"));
+    const pistolMeshes = activeModel.meshes.filter(m => m.name.toLowerCase().includes("pistol"));
 
     const isMelee = c.combatStyle === "melee";
     swordMeshes.forEach(m => m.setEnabled(isMelee));
     pistolMeshes.forEach(m => m.setEnabled(!isMelee));
 
     // Switch animation based on combat style
-    preview.animationGroups.forEach(ag => ag.stop());
+    activeModel.animationGroups.forEach(ag => ag.stop());
     const idleAnim = isMelee
-      ? preview.animationGroups.find(ag => ag.name === "Idle_Sword")
-      : preview.animationGroups.find(ag => ag.name === "Idle_Gun");
+      ? activeModel.animationGroups.find(ag => ag.name === "Idle_Sword")
+      : activeModel.animationGroups.find(ag => ag.name === "Idle_Gun");
     idleAnim?.start(true);
 
     // Update materials (skin, hair, eyes) using correct material names
-    preview.meshes.forEach(mesh => {
+    activeModel.meshes.forEach(mesh => {
       if (!mesh.material) return;
       const mat = mesh.material as PBRMaterial;
       const matName = mat.name;
@@ -191,14 +209,8 @@ export function createLoadoutScene(
 
     // Handedness - flip X scale (model is reversed by default due to Babylon/Blender axis swap)
     // Right-handed = flip to correct, Left-handed = keep reversed
-    const root = preview.meshes[0];
-    if (root) {
-      const baseScale = 0.9;
-      root.scaling.x = c.handedness === "right" ? -baseScale : baseScale;
-    }
-
-    // Body type stored for future model switching (not implemented yet)
-    // c.body === "male" or "female"
+    const baseScale = 0.9;
+    activeModel.root.scaling.x = c.handedness === "right" ? -baseScale : baseScale;
   }
 
   async function createMedicPreview(
@@ -244,39 +256,53 @@ export function createLoadoutScene(
       } as any;
     };
 
-    // Load medic model
-    const result = await SceneLoader.ImportMeshAsync("", "/models/", "medic_m.glb", scene);
-
     // Use layer mask to hide from main camera (0x0FFFFFFF), only show to preview
     const previewLayer = side === "left" ? 0x10000000 : 0x20000000;
     previewCamera.layerMask = previewLayer;
 
-    // Position model at offset location
-    const root = result.meshes[0];
-    root.position = new Vector3(modelOffset, 0, 0);
-    root.scaling = new Vector3(0.9, 0.9, 0.9);
-
-    // Add meshes to RTT render list and set layer mask
-    result.meshes.forEach(m => {
-      m.layerMask = previewLayer;
-      rtt.renderList?.push(m);
-    });
-
-    // Set team color on TeamMain material
+    // Team color
     const teamColor = side === "left"
       ? new Color3(0.2, 0.4, 0.9)   // Blue for player 1
       : new Color3(0.9, 0.3, 0.2);  // Red for player 2
 
-    result.meshes.forEach(mesh => {
-      if (mesh.material && mesh.material.name === "TeamMain") {
-        const mat = mesh.material as PBRMaterial;
-        mat.albedoColor = teamColor;
-      }
-    });
+    // Helper to set up a model
+    const setupModel = (result: { meshes: AbstractMesh[]; animationGroups: AnimationGroup[] }, offsetX: number): ModelData => {
+      const root = result.meshes[0];
+      root.position = new Vector3(modelOffset, 0, offsetX);
+      root.scaling = new Vector3(0.9, 0.9, 0.9);
 
-    // Start idle animation
-    const idleAnim = result.animationGroups.find(ag => ag.name === "Idle_Gun");
-    result.animationGroups.forEach(ag => ag.stop());
+      // Add meshes to RTT render list and set layer mask
+      result.meshes.forEach(m => {
+        m.layerMask = previewLayer;
+        rtt.renderList?.push(m);
+      });
+
+      // Set team color
+      result.meshes.forEach(mesh => {
+        if (mesh.material && mesh.material.name === "TeamMain") {
+          const mat = mesh.material as PBRMaterial;
+          mat.albedoColor = teamColor;
+        }
+      });
+
+      return {
+        meshes: result.meshes,
+        animationGroups: result.animationGroups,
+        root,
+      };
+    };
+
+    // Load both models
+    const maleResult = await SceneLoader.ImportMeshAsync("", "/models/", "medic_m.glb", scene);
+    const femaleResult = await SceneLoader.ImportMeshAsync("", "/models/", "medic_f.glb", scene);
+
+    const maleModel = setupModel(maleResult, 0);
+    const femaleModel = setupModel(femaleResult, 0);
+
+    // Hide female by default, start male animation
+    femaleModel.root.setEnabled(false);
+    maleModel.animationGroups.forEach(ag => ag.stop());
+    const idleAnim = maleModel.animationGroups.find(ag => ag.name === "Idle_Gun");
     idleAnim?.start(true);
 
     // Create HTML canvas for displaying RTT in GUI
@@ -330,8 +356,8 @@ export function createLoadoutScene(
     });
 
     const preview: MedicPreview = {
-      meshes: result.meshes,
-      animationGroups: result.animationGroups,
+      male: maleModel,
+      female: femaleModel,
       rtt,
       previewCamera,
       canvas,
