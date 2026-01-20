@@ -131,15 +131,20 @@ export function createLoadoutScene(
     root: AbstractMesh;
   }
 
-  interface MedicPreview {
+  interface ClassModels {
     male: ModelData;
     female: ModelData;
+  }
+
+  interface UnitPreview {
+    soldier: ClassModels;
+    medic: ClassModels;
     rtt: RenderTargetTexture;
     previewCamera: ArcRotateCamera;
     canvas: HTMLCanvasElement;
   }
 
-  const previews: { left?: MedicPreview; right?: MedicPreview } = {};
+  const previews: { left?: UnitPreview; right?: UnitPreview } = {};
 
   // Zoom presets: [radius, targetY]
   const ZOOM_PRESETS = [
@@ -155,13 +160,25 @@ export function createLoadoutScene(
     return new Color3(r, g, b);
   }
 
-  function updatePreview(preview: MedicPreview | undefined, c: SupportCustomization): void {
-    if (!preview) return;
+  function updatePreview(preview: UnitPreview | undefined, c: SupportCustomization, classType: UnitType | null): void {
+    if (!preview || !classType) return;
+
+    // Determine which class models to use (soldier for tank, medic for support)
+    // For now, operator (damage) will use medic models as placeholder
+    const classKey = classType === "tank" ? "soldier" : "medic";
+    const classModels = preview[classKey];
+    const otherClassModels = classType === "tank" ? preview.medic : preview.soldier;
+
+    // Hide all models from other class
+    otherClassModels.male.root.setEnabled(false);
+    otherClassModels.female.root.setEnabled(false);
+    otherClassModels.male.animationGroups.forEach(ag => ag.stop());
+    otherClassModels.female.animationGroups.forEach(ag => ag.stop());
 
     // Show/hide based on body type
     const isMale = c.body === "male";
-    const activeModel = isMale ? preview.male : preview.female;
-    const inactiveModel = isMale ? preview.female : preview.male;
+    const activeModel = isMale ? classModels.male : classModels.female;
+    const inactiveModel = isMale ? classModels.female : classModels.male;
 
     // Hide inactive model, show active
     inactiveModel.root.setEnabled(false);
@@ -213,11 +230,10 @@ export function createLoadoutScene(
     activeModel.root.scaling.x = c.handedness === "right" ? -baseScale : baseScale;
   }
 
-  async function createMedicPreview(
+  async function createUnitPreview(
     side: "left" | "right",
-    previewRect: Rectangle,
-    _customization: SupportCustomization
-  ): Promise<MedicPreview> {
+    previewRect: Rectangle
+  ): Promise<UnitPreview> {
     // Position model far away so main camera doesn't see it
     const modelOffset = side === "left" ? -100 : 100;
 
@@ -266,9 +282,9 @@ export function createLoadoutScene(
       : new Color3(0.9, 0.3, 0.2);  // Red for player 2
 
     // Helper to set up a model
-    const setupModel = (result: { meshes: AbstractMesh[]; animationGroups: AnimationGroup[] }, offsetX: number): ModelData => {
+    const setupModel = (result: { meshes: AbstractMesh[]; animationGroups: AnimationGroup[] }): ModelData => {
       const root = result.meshes[0];
-      root.position = new Vector3(modelOffset, 0, offsetX);
+      root.position = new Vector3(modelOffset, 0, 0);
       root.scaling = new Vector3(0.9, 0.9, 0.9);
 
       // Add meshes to RTT render list and set layer mask
@@ -292,18 +308,28 @@ export function createLoadoutScene(
       };
     };
 
-    // Load both models
-    const maleResult = await SceneLoader.ImportMeshAsync("", "/models/", "medic_m.glb", scene);
-    const femaleResult = await SceneLoader.ImportMeshAsync("", "/models/", "medic_f.glb", scene);
+    // Load all models (soldier and medic, male and female)
+    const [soldierMaleResult, soldierFemaleResult, medicMaleResult, medicFemaleResult] = await Promise.all([
+      SceneLoader.ImportMeshAsync("", "/models/", "soldier_m.glb", scene),
+      SceneLoader.ImportMeshAsync("", "/models/", "soldier_f.glb", scene),
+      SceneLoader.ImportMeshAsync("", "/models/", "medic_m.glb", scene),
+      SceneLoader.ImportMeshAsync("", "/models/", "medic_f.glb", scene),
+    ]);
 
-    const maleModel = setupModel(maleResult, 0);
-    const femaleModel = setupModel(femaleResult, 0);
+    const soldierMale = setupModel(soldierMaleResult);
+    const soldierFemale = setupModel(soldierFemaleResult);
+    const medicMale = setupModel(medicMaleResult);
+    const medicFemale = setupModel(medicFemaleResult);
 
-    // Hide female by default, start male animation
-    femaleModel.root.setEnabled(false);
-    maleModel.animationGroups.forEach(ag => ag.stop());
-    const idleAnim = maleModel.animationGroups.find(ag => ag.name === "Idle_Gun");
-    idleAnim?.start(true);
+    // Hide all models by default (will be shown when class is selected)
+    soldierMale.root.setEnabled(false);
+    soldierFemale.root.setEnabled(false);
+    medicMale.root.setEnabled(false);
+    medicFemale.root.setEnabled(false);
+
+    // Stop all animations
+    [...soldierMale.animationGroups, ...soldierFemale.animationGroups,
+     ...medicMale.animationGroups, ...medicFemale.animationGroups].forEach(ag => ag.stop());
 
     // Create HTML canvas for displaying RTT in GUI
     const canvas = document.createElement("canvas");
@@ -355,9 +381,9 @@ export function createLoadoutScene(
       });
     });
 
-    const preview: MedicPreview = {
-      male: maleModel,
-      female: femaleModel,
+    const preview: UnitPreview = {
+      soldier: { male: soldierMale, female: soldierFemale },
+      medic: { male: medicMale, female: medicFemale },
       rtt,
       previewCamera,
       canvas,
@@ -432,15 +458,13 @@ export function createLoadoutScene(
     container.width = "95%";
     container.height = "100%";
     // Row 0: Player name (35px)
-    // Row 1: Selection display (25px)
+    // Row 1: Selection display + Clear button (28px)
     // Row 2: Class buttons (45px)
     // Row 3: Customization panel (takes remaining space)
-    // Row 4: Clear button (35px)
     container.addRowDefinition(35, true);   // Player name - fixed px
-    container.addRowDefinition(25, true);   // Selection - fixed px
+    container.addRowDefinition(28, true);   // Selection + Clear - fixed px
     container.addRowDefinition(45, true);   // Buttons - fixed px
     container.addRowDefinition(1);          // Custom panel - fill remaining
-    container.addRowDefinition(35, true);   // Clear - fixed px
     container.addColumnDefinition(1);
     panel.addControl(container);
 
@@ -453,13 +477,37 @@ export function createLoadoutScene(
     nameText.textHorizontalAlignment = Control.HORIZONTAL_ALIGNMENT_CENTER;
     container.addControl(nameText, 0, 0);
 
-    // Selection display - centered, color coded (row 1)
+    // Row 1: Selection display + Clear button
+    const selectionRow = new Grid();
+    selectionRow.width = "100%";
+    selectionRow.addColumnDefinition(1);        // Selection text - fill
+    selectionRow.addColumnDefinition(70, true); // Clear button - fixed width
+    selectionRow.addRowDefinition(1);
+    container.addControl(selectionRow, 1, 0);
+
     const selectionDisplay = new TextBlock();
     selectionDisplay.text = "Selected: (choose 3)";
     selectionDisplay.color = "#ff6666";
     selectionDisplay.fontSize = 13;
     selectionDisplay.textHorizontalAlignment = Control.HORIZONTAL_ALIGNMENT_CENTER;
-    container.addControl(selectionDisplay, 1, 0);
+    selectionRow.addControl(selectionDisplay, 0, 0);
+
+    // Clear button next to selection
+    const clearBtn = Button.CreateSimpleButton(`${playerName}_clear`, "Clear");
+    clearBtn.width = "100%";
+    clearBtn.height = "22px";
+    clearBtn.color = "#ff6666";
+    clearBtn.background = "#442222";
+    clearBtn.cornerRadius = 3;
+    clearBtn.fontSize = 11;
+    clearBtn.onPointerClickObservable.add(() => {
+      selectionArray.length = 0;
+      updateSelectionDisplay();
+      updateStartButton();
+      customPanel.isVisible = false;
+      selectedClass = null;
+    });
+    selectionRow.addControl(clearBtn, 0, 1);
 
     const updateSelectionDisplay = (): void => {
       if (selectionArray.length === 0) {
@@ -510,9 +558,8 @@ export function createLoadoutScene(
     const customContainer = new Grid();
     customContainer.width = "98%";
     customContainer.height = "100%";
-    customContainer.addRowDefinition(0.12);  // Title - 12%
-    customContainer.addRowDefinition(0.72);  // Options + Preview - 72%
-    customContainer.addRowDefinition(0.16);  // Add button - 16%
+    customContainer.addRowDefinition(0.10);  // Title - 10%
+    customContainer.addRowDefinition(0.90);  // Options + Preview + Add button - 90%
     customContainer.addColumnDefinition(1);
     customPanel.addControl(customContainer);
 
@@ -559,51 +606,53 @@ export function createLoadoutScene(
     // Left column controls
     const bodyChooser = createOptionChooser("Body", ["Male", "Female"], 0, (idx) => {
       currentCustomization.body = idx === 0 ? "male" : "female";
-      updatePreview(previews[side], currentCustomization);
+      updatePreview(previews[side], currentCustomization, selectedClass);
+      updateDescription();
     });
     controlsGrid.addControl(bodyChooser, 0, 0);
 
     const headChooser = createOptionChooser("Head", ["1", "2", "3", "4"], 0, (idx) => {
       currentCustomization.head = idx;
-      updatePreview(previews[side], currentCustomization);
+      updatePreview(previews[side], currentCustomization, selectedClass);
     });
     controlsGrid.addControl(headChooser, 1, 0);
 
     const styleChooser = createOptionChooser("Style", ["Ranged", "Melee"], 0, (idx) => {
       currentCustomization.combatStyle = idx === 0 ? "ranged" : "melee";
-      updatePreview(previews[side], currentCustomization);
+      updatePreview(previews[side], currentCustomization, selectedClass);
+      updateDescription();
     });
     controlsGrid.addControl(styleChooser, 2, 0);
 
     const handChooser = createOptionChooser("Hand", ["Right", "Left"], 0, (idx) => {
       currentCustomization.handedness = idx === 0 ? "right" : "left";
-      updatePreview(previews[side], currentCustomization);
+      updatePreview(previews[side], currentCustomization, selectedClass);
     });
     controlsGrid.addControl(handChooser, 3, 0);
 
     // Right column controls
     const hairChooser = createColorChooser("Hair", HAIR_COLORS, 0, (idx) => {
       currentCustomization.hairColor = idx;
-      updatePreview(previews[side], currentCustomization);
+      updatePreview(previews[side], currentCustomization, selectedClass);
     });
     controlsGrid.addControl(hairChooser, 0, 1);
 
     const eyesChooser = createColorChooser("Eyes", EYE_COLORS, 2, (idx) => {
       currentCustomization.eyeColor = idx;
-      updatePreview(previews[side], currentCustomization);
+      updatePreview(previews[side], currentCustomization, selectedClass);
     });
     controlsGrid.addControl(eyesChooser, 1, 1);
 
     const skinChooser = createColorChooser("Skin", SKIN_TONES, 4, (idx) => {
       currentCustomization.skinTone = idx;
-      updatePreview(previews[side], currentCustomization);
+      updatePreview(previews[side], currentCustomization, selectedClass);
     });
     controlsGrid.addControl(skinChooser, 2, 1);
 
-    // Copy text below controls
+    // Copy text below controls - dynamic based on class, gender, and combat style
     const descriptionText = new TextBlock();
-    descriptionText.text = "Lorem ipsum dolor sit amet, consectetur adipiscing elit. Sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat.";
-    descriptionText.color = "#999999";
+    descriptionText.text = "";
+    descriptionText.color = "#cccccc";
     descriptionText.fontSize = 11;
     descriptionText.textWrapping = true;
     descriptionText.textHorizontalAlignment = Control.HORIZONTAL_ALIGNMENT_LEFT;
@@ -613,7 +662,52 @@ export function createLoadoutScene(
     descriptionText.paddingRight = "5px";
     optionsCol.addControl(descriptionText, 1, 0);
 
-    // Right column: Preview area - portrait, image maintains aspect ratio
+    // Generate dynamic description based on class, body, and combat style
+    function updateDescription(): void {
+      if (!selectedClass) {
+        descriptionText.text = "";
+        return;
+      }
+
+      const isMale = currentCustomization.body === "male";
+      const pronoun = isMale ? "he" : "she";
+      const pronounObj = isMale ? "him" : "her";
+      const isMelee = currentCustomization.combatStyle === "melee";
+
+      let fluff = "";
+      let ability = "";
+      let weapon = "";
+
+      if (selectedClass === "tank") {
+        fluff = `Soldiers are the backbone of settlement defense. Drawn from Earth's militaries and security forces, they volunteered to protect humanity's last hope. Where others see danger, ${pronoun} sees a perimeter to hold.`;
+        ability = `[COVER]\nWhen activated, if an enemy ends their move within attack range, the Soldier strikes first with a devastating counter attack.`;
+      } else if (selectedClass === "damage") {
+        fluff = `Operators work beyond the settlement walls where survival demands cunning over strength. Whether scouting hostile terrain or eliminating threats before they reach the settlement, ${pronoun} is the unseen blade that keeps the settlement safe.`;
+        ability = `[CONCEAL]\nWhen activated, the next incoming hit is completely negated, allowing ${pronounObj} to survive otherwise fatal encounters.`;
+      } else if (selectedClass === "support") {
+        fluff = `In a settlement where every life is precious, Medics are revered. Trained in both trauma care and combat medicine, ${pronoun} keeps the team fighting when the odds turn grim.`;
+        ability = `[HEAL]\nSelect self or an ally to restore HP. The difference between victory and defeat often comes down to keeping the right person standing.`;
+      }
+
+      if (isMelee) {
+        weapon = `[MELEE]\nAttacks and counter attacks in ordinal directions, one space away within line of sight. Best for holding chokepoints.`;
+      } else {
+        weapon = `[RANGED]\nAttacks and counter attacks anywhere within line of sight, except adjacent ordinal spaces. Optimal for controlling the battlefield from a distance.`;
+      }
+
+      descriptionText.text = `${fluff}\n\n${ability}\n\n${weapon}`;
+    }
+
+    // Right column: Preview + Add button
+    const rightCol = new Grid();
+    rightCol.width = "100%";
+    rightCol.height = "100%";
+    rightCol.addRowDefinition(1);           // Preview - fill
+    rightCol.addRowDefinition(45, true);    // Add button - fixed height
+    rightCol.addColumnDefinition(1);
+    customGrid.addControl(rightCol, 0, 1);
+
+    // Preview area
     const previewArea = new Rectangle();
     previewArea.width = "95%";
     previewArea.height = "95%";
@@ -621,7 +715,7 @@ export function createLoadoutScene(
     previewArea.thickness = 1;
     previewArea.color = "#555577";
     previewArea.cornerRadius = 5;
-    customGrid.addControl(previewArea, 0, 1);
+    rightCol.addControl(previewArea, 0, 0);
 
     const loadingText = new TextBlock();
     loadingText.text = "Loading...";
@@ -701,12 +795,14 @@ export function createLoadoutScene(
     });
 
     // Initialize 3D preview
-    createMedicPreview(side, previewArea, currentCustomization)
+    createUnitPreview(side, previewArea)
       .then((preview) => {
         previews[side] = preview;
         loadingText.text = "";
-        // Apply initial customization
-        updatePreview(preview, currentCustomization);
+        // Models start hidden - will be shown when class is selected
+        if (selectedClass) {
+          updatePreview(preview, currentCustomization, selectedClass);
+        }
       })
       .catch((err) => {
         console.error(`Failed to load ${side} preview:`, err);
@@ -714,10 +810,10 @@ export function createLoadoutScene(
         loadingText.color = "#ff4444";
       });
 
-    // Add button at bottom of customization panel (row 2)
+    // Add button under preview
     const addBtn = Button.CreateSimpleButton(`${playerName}_add`, "+ Add");
     addBtn.width = "95%";
-    addBtn.height = "80%";
+    addBtn.height = "38px";
     addBtn.verticalAlignment = Control.VERTICAL_ALIGNMENT_CENTER;
     addBtn.color = "white";
     addBtn.background = "#338833";
@@ -737,7 +833,7 @@ export function createLoadoutScene(
         selectedClass = null;
       }
     });
-    customContainer.addControl(addBtn, 2, 0);
+    rightCol.addControl(addBtn, 1, 0);
 
     // Function to open customization for a class
     const openCustomization = (classType: UnitType): void => {
@@ -748,6 +844,9 @@ export function createLoadoutScene(
       const btnText = addBtn.textBlock;
       if (btnText) btnText.text = `+ Add ${info.name}`;
       customPanel.isVisible = true;
+      updateDescription();
+      // Show the correct model for the selected class
+      updatePreview(previews[side], currentCustomization, selectedClass);
     };
 
     // Create class buttons
@@ -779,22 +878,6 @@ export function createLoadoutScene(
       classButtons.push(btn);
       classButtonRow.addControl(btn, 0, index);  // Add to specific column
     });
-
-    // Clear button (row 4)
-    const clearBtn = Button.CreateSimpleButton(`${playerName}_clear`, "Clear All");
-    clearBtn.width = "100%";
-    clearBtn.height = "100%";
-    clearBtn.color = "#ff6666";
-    clearBtn.background = "#442222";
-    clearBtn.cornerRadius = 5;
-    clearBtn.onPointerClickObservable.add(() => {
-      selectionArray.length = 0;
-      updateSelectionDisplay();
-      updateStartButton();
-      customPanel.isVisible = false;
-      selectedClass = null;
-    });
-    container.addControl(clearBtn, 4, 0);
 
     return panel;
   }

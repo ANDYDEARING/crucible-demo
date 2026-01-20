@@ -27,7 +27,7 @@ export interface Loadout {
 
 export const UNIT_INFO: Record<UnitType, { name: string; hp: number; attack: number; moveRange: number; attackRange: number; description: string }> = {
   tank: {
-    name: "Tank",
+    name: "Soldier",
     hp: 100,
     attack: 15,
     moveRange: 2,
@@ -35,7 +35,7 @@ export const UNIT_INFO: Record<UnitType, { name: string; hp: number; attack: num
     description: "High HP, low damage. Gets in the enemy's face."
   },
   damage: {
-    name: "Damage",
+    name: "Operator",
     hp: 50,
     attack: 30,
     moveRange: 4,
