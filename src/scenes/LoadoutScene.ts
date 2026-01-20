@@ -138,6 +138,7 @@ export function createLoadoutScene(
 
   interface UnitPreview {
     soldier: ClassModels;
+    operator: ClassModels;
     medic: ClassModels;
     rtt: RenderTargetTexture;
     previewCamera: ArcRotateCamera;
@@ -163,17 +164,20 @@ export function createLoadoutScene(
   function updatePreview(preview: UnitPreview | undefined, c: SupportCustomization, classType: UnitType | null): void {
     if (!preview || !classType) return;
 
-    // Determine which class models to use (soldier for tank, medic for support)
-    // For now, operator (damage) will use medic models as placeholder
-    const classKey = classType === "tank" ? "soldier" : "medic";
+    // Determine which class models to use
+    const classKey = classType === "tank" ? "soldier" : classType === "damage" ? "operator" : "medic";
     const classModels = preview[classKey];
-    const otherClassModels = classType === "tank" ? preview.medic : preview.soldier;
 
-    // Hide all models from other class
-    otherClassModels.male.root.setEnabled(false);
-    otherClassModels.female.root.setEnabled(false);
-    otherClassModels.male.animationGroups.forEach(ag => ag.stop());
-    otherClassModels.female.animationGroups.forEach(ag => ag.stop());
+    // Hide all models from other classes
+    const allClasses: Array<"soldier" | "operator" | "medic"> = ["soldier", "operator", "medic"];
+    for (const key of allClasses) {
+      if (key !== classKey) {
+        preview[key].male.root.setEnabled(false);
+        preview[key].female.root.setEnabled(false);
+        preview[key].male.animationGroups.forEach(ag => ag.stop());
+        preview[key].female.animationGroups.forEach(ag => ag.stop());
+      }
+    }
 
     // Show/hide based on body type
     const isMale = c.body === "male";
@@ -308,28 +312,41 @@ export function createLoadoutScene(
       };
     };
 
-    // Load all models (soldier and medic, male and female)
-    const [soldierMaleResult, soldierFemaleResult, medicMaleResult, medicFemaleResult] = await Promise.all([
+    // Load all models (soldier, operator, and medic - male and female)
+    const [
+      soldierMaleResult, soldierFemaleResult,
+      operatorMaleResult, operatorFemaleResult,
+      medicMaleResult, medicFemaleResult
+    ] = await Promise.all([
       SceneLoader.ImportMeshAsync("", "/models/", "soldier_m.glb", scene),
       SceneLoader.ImportMeshAsync("", "/models/", "soldier_f.glb", scene),
+      SceneLoader.ImportMeshAsync("", "/models/", "operator_m.glb", scene),
+      SceneLoader.ImportMeshAsync("", "/models/", "operator_f.glb", scene),
       SceneLoader.ImportMeshAsync("", "/models/", "medic_m.glb", scene),
       SceneLoader.ImportMeshAsync("", "/models/", "medic_f.glb", scene),
     ]);
 
     const soldierMale = setupModel(soldierMaleResult);
     const soldierFemale = setupModel(soldierFemaleResult);
+    const operatorMale = setupModel(operatorMaleResult);
+    const operatorFemale = setupModel(operatorFemaleResult);
     const medicMale = setupModel(medicMaleResult);
     const medicFemale = setupModel(medicFemaleResult);
 
     // Hide all models by default (will be shown when class is selected)
     soldierMale.root.setEnabled(false);
     soldierFemale.root.setEnabled(false);
+    operatorMale.root.setEnabled(false);
+    operatorFemale.root.setEnabled(false);
     medicMale.root.setEnabled(false);
     medicFemale.root.setEnabled(false);
 
     // Stop all animations
-    [...soldierMale.animationGroups, ...soldierFemale.animationGroups,
-     ...medicMale.animationGroups, ...medicFemale.animationGroups].forEach(ag => ag.stop());
+    [
+      ...soldierMale.animationGroups, ...soldierFemale.animationGroups,
+      ...operatorMale.animationGroups, ...operatorFemale.animationGroups,
+      ...medicMale.animationGroups, ...medicFemale.animationGroups
+    ].forEach(ag => ag.stop());
 
     // Create HTML canvas for displaying RTT in GUI
     const canvas = document.createElement("canvas");
@@ -383,6 +400,7 @@ export function createLoadoutScene(
 
     const preview: UnitPreview = {
       soldier: { male: soldierMale, female: soldierFemale },
+      operator: { male: operatorMale, female: operatorFemale },
       medic: { male: medicMale, female: medicFemale },
       rtt,
       previewCamera,
