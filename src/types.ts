@@ -23,6 +23,8 @@ export interface UnitSelection {
 export interface Loadout {
   player: UnitSelection[];
   enemy: UnitSelection[];
+  playerTeamColor?: string;  // hex color for player team
+  enemyTeamColor?: string;   // hex color for enemy team
 }
 
 export const UNIT_INFO: Record<UnitType, { name: string; hp: number; attack: number; moveRange: number; attackRange: number; description: string }> = {
