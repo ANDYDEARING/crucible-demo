@@ -61,6 +61,17 @@ const EYE_COLORS = [
   "#FF8800",  // Orange
 ];
 
+// Team colors available for selection
+const TEAM_COLORS = [
+  { name: "Red", hex: "#DD3333" },
+  { name: "Orange", hex: "#FF8800" },
+  { name: "Blue", hex: "#3366DD" },
+  { name: "Green", hex: "#33AA44" },
+  { name: "Purple", hex: "#8833CC" },
+  { name: "Pink", hex: "#DD66AA" },
+  { name: "Yellow", hex: "#DDBB22" },
+];
+
 export function createLoadoutScene(
   engine: Engine,
   _canvas: HTMLCanvasElement,
@@ -121,8 +132,13 @@ export function createLoadoutScene(
   // Track selections
   const selections: Loadout = {
     player: [],
-    enemy: []
+    enemy: [],
+    playerTeamColor: TEAM_COLORS[2].hex,  // Default blue
+    enemyTeamColor: TEAM_COLORS[0].hex,   // Default red
   };
+
+  // Track team color UI refresh callbacks
+  const teamColorRefreshCallbacks: { left?: () => void; right?: () => void } = {};
 
   // 3D Preview system using RTT
   interface ModelData {
@@ -280,10 +296,11 @@ export function createLoadoutScene(
     const previewLayer = side === "left" ? 0x10000000 : 0x20000000;
     previewCamera.layerMask = previewLayer;
 
-    // Team color
-    const teamColor = side === "left"
-      ? new Color3(0.2, 0.4, 0.9)   // Blue for player 1
-      : new Color3(0.9, 0.3, 0.2);  // Red for player 2
+    // Team color - use selected color or default
+    const teamColorHex = side === "left"
+      ? (selections.playerTeamColor || TEAM_COLORS[2].hex)
+      : (selections.enemyTeamColor || TEAM_COLORS[0].hex);
+    const teamColor = hexToColor3(teamColorHex);
 
     // Helper to set up a model
     const setupModel = (result: { meshes: AbstractMesh[]; animationGroups: AnimationGroup[] }): ModelData => {
@@ -475,11 +492,13 @@ export function createLoadoutScene(
     const container = new Grid();
     container.width = "95%";
     container.height = "100%";
-    // Row 0: Player name (35px)
-    // Row 1: Selection display + Clear button (28px)
-    // Row 2: Class buttons (45px)
-    // Row 3: Customization panel (takes remaining space)
-    container.addRowDefinition(35, true);   // Player name - fixed px
+    // Row 0: Player name (30px)
+    // Row 1: Team color selector (32px)
+    // Row 2: Selection display + Clear button (28px)
+    // Row 3: Class buttons (45px)
+    // Row 4: Customization panel (takes remaining space)
+    container.addRowDefinition(30, true);   // Player name - fixed px
+    container.addRowDefinition(32, true);   // Team color selector - fixed px
     container.addRowDefinition(28, true);   // Selection + Clear - fixed px
     container.addRowDefinition(45, true);   // Buttons - fixed px
     container.addRowDefinition(1);          // Custom panel - fill remaining
@@ -495,13 +514,134 @@ export function createLoadoutScene(
     nameText.textHorizontalAlignment = Control.HORIZONTAL_ALIGNMENT_CENTER;
     container.addControl(nameText, 0, 0);
 
-    // Row 1: Selection display + Clear button
+    // Row 1: Team color selector
+    const colorRow = new StackPanel();
+    colorRow.isVertical = false;
+    colorRow.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_CENTER;
+    colorRow.height = "28px";
+    container.addControl(colorRow, 1, 0);
+
+    const colorLabel = new TextBlock();
+    colorLabel.text = "Team:";
+    colorLabel.color = "#aaaaaa";
+    colorLabel.fontSize = 12;
+    colorLabel.width = "45px";
+    colorLabel.textHorizontalAlignment = Control.HORIZONTAL_ALIGNMENT_RIGHT;
+    colorLabel.paddingRight = "5px";
+    colorRow.addControl(colorLabel);
+
+    // Store color swatch references for updating disabled state
+    const colorSwatches: Rectangle[] = [];
+    const isPlayerSide = side === "left";
+
+    // Function to get the other player's selected color
+    const getOtherPlayerColor = (): string | undefined => {
+      return isPlayerSide ? selections.enemyTeamColor : selections.playerTeamColor;
+    };
+
+    // Function to update this player's team color
+    const setTeamColor = (hexColor: string): void => {
+      if (isPlayerSide) {
+        selections.playerTeamColor = hexColor;
+      } else {
+        selections.enemyTeamColor = hexColor;
+      }
+    };
+
+    // Function to get this player's current color
+    const getTeamColor = (): string | undefined => {
+      return isPlayerSide ? selections.playerTeamColor : selections.enemyTeamColor;
+    };
+
+    // Create color swatches
+    TEAM_COLORS.forEach((teamColor) => {
+      const swatch = new Rectangle();
+      swatch.width = "24px";
+      swatch.height = "24px";
+      swatch.background = teamColor.hex;
+      swatch.cornerRadius = 4;
+      swatch.paddingLeft = "2px";
+      swatch.paddingRight = "2px";
+
+      // Set initial selection state
+      const isSelected = getTeamColor() === teamColor.hex;
+      const isDisabled = getOtherPlayerColor() === teamColor.hex;
+      swatch.thickness = isSelected ? 3 : 1;
+      swatch.color = isSelected ? "white" : "#333333";
+      swatch.alpha = isDisabled ? 0.3 : 1;
+
+      swatch.onPointerClickObservable.add(() => {
+        // Don't allow selecting if other player has this color
+        if (getOtherPlayerColor() === teamColor.hex) return;
+
+        // Update selection
+        setTeamColor(teamColor.hex);
+
+        // Update all swatches visual state
+        refreshColorSwatches();
+
+        // Update the panel border color to match
+        panel.color = teamColor.hex;
+        nameText.color = teamColor.hex;
+
+        // Update 3D model team color
+        updateTeamColorOnModels(teamColor.hex);
+
+        // Notify other panel to refresh its swatches
+        const otherSide = isPlayerSide ? "right" : "left";
+        if (teamColorRefreshCallbacks[otherSide]) {
+          teamColorRefreshCallbacks[otherSide]!();
+        }
+      });
+
+      colorSwatches.push(swatch);
+      colorRow.addControl(swatch);
+    });
+
+    // Function to refresh color swatch visual states
+    const refreshColorSwatches = (): void => {
+      TEAM_COLORS.forEach((teamColor, i) => {
+        const swatch = colorSwatches[i];
+        const isSelected = getTeamColor() === teamColor.hex;
+        const isDisabled = getOtherPlayerColor() === teamColor.hex;
+        swatch.thickness = isSelected ? 3 : 1;
+        swatch.color = isSelected ? "white" : "#333333";
+        swatch.alpha = isDisabled ? 0.3 : 1;
+      });
+    };
+
+    // Register refresh callback so other panel can update this one
+    teamColorRefreshCallbacks[side] = refreshColorSwatches;
+
+    // Function to update team color on 3D models
+    const updateTeamColorOnModels = (hexColor: string): void => {
+      const preview = previews[side];
+      if (!preview) return;
+
+      const teamColor3 = hexToColor3(hexColor);
+      const allModels = [
+        preview.soldier.male, preview.soldier.female,
+        preview.operator.male, preview.operator.female,
+        preview.medic.male, preview.medic.female,
+      ];
+
+      allModels.forEach(model => {
+        model.meshes.forEach(mesh => {
+          if (mesh.material && mesh.material.name === "TeamMain") {
+            const mat = mesh.material as PBRMaterial;
+            mat.albedoColor = teamColor3;
+          }
+        });
+      });
+    };
+
+    // Row 2: Selection display + Clear button
     const selectionRow = new Grid();
     selectionRow.width = "100%";
     selectionRow.addColumnDefinition(1);        // Selection text - fill
     selectionRow.addColumnDefinition(70, true); // Clear button - fixed width
     selectionRow.addRowDefinition(1);
-    container.addControl(selectionRow, 1, 0);
+    container.addControl(selectionRow, 2, 0);
 
     const selectionDisplay = new TextBlock();
     selectionDisplay.text = "Selected: (choose 3)";
@@ -538,14 +678,14 @@ export function createLoadoutScene(
       }
     };
 
-    // Class buttons row - spread across using Grid (row 2)
+    // Class buttons row - spread across using Grid (row 3)
     const classButtonRow = new Grid();
     classButtonRow.width = "100%";
     classButtonRow.addColumnDefinition(1/3);
     classButtonRow.addColumnDefinition(1/3);
     classButtonRow.addColumnDefinition(1/3);
     classButtonRow.addRowDefinition(1);
-    container.addControl(classButtonRow, 2, 0);
+    container.addControl(classButtonRow, 3, 0);
 
     // Track which class is currently selected for customization
     let selectedClass: UnitType | null = null;
@@ -561,7 +701,7 @@ export function createLoadoutScene(
       skinTone: 4,  // Medium skin tone default
     };
 
-    // Customization panel (hidden by default) - row 3, fills remaining space
+    // Customization panel (hidden by default) - row 4, fills remaining space
     const customPanel = new Rectangle();
     customPanel.width = "100%";
     customPanel.height = "100%";
@@ -570,7 +710,7 @@ export function createLoadoutScene(
     customPanel.thickness = 1;
     customPanel.color = "#555588";
     customPanel.isVisible = false;
-    container.addControl(customPanel, 3, 0);
+    container.addControl(customPanel, 4, 0);
 
     // Use Grid for customization panel layout
     const customContainer = new Grid();
@@ -594,7 +734,6 @@ export function createLoadoutScene(
     const customGrid = new Grid();
     customGrid.width = "100%";
     customGrid.height = "100%";
-    customGrid.verticalAlignment = Control.VERTICAL_ALIGNMENT_STRETCH;
     customGrid.addColumnDefinition(0.7);   // Options + Copy
     customGrid.addColumnDefinition(0.3);   // Preview
     customGrid.addRowDefinition(1);

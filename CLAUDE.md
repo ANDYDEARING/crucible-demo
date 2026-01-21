@@ -50,3 +50,14 @@ When implementing features:
 - Match-making approach
 - Win conditions
 - Unit variety for prototype
+
+## Conversation Log
+
+### 2026-01-21
+- Started conversation logging in CLAUDE.md
+- Added team color selector to LoadoutScene
+  - 7 colors: Red, Orange, Blue, Green, Purple, Pink, Yellow
+  - Each player can select their team color at the top of their panel
+  - When one player selects a color, it's disabled (grayed out) for the other player
+  - Team color updates the 3D model preview and panel border/title color
+  - Colors stored in `Loadout.playerTeamColor` and `Loadout.enemyTeamColor`
