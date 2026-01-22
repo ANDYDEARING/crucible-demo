@@ -30,7 +30,7 @@ export function createTitleScene(
   scene.clearColor = new Color4(0.02, 0.01, 0.01, 1);
 
   // Background music
-  const music = new Audio("/audio/rise-above-clumsy-loop.m4a");
+  const music = new Audio("/audio/rise_above_loop_v3.m4a");
   music.loop = true;
   music.volume = 0.5;
   music.addEventListener("timeupdate", () => {

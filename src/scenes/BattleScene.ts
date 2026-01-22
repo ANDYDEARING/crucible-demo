@@ -58,7 +58,7 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
   scene.clearColor.set(0.1, 0.1, 0.15, 1);
 
   // Battle music - Placeholder
-  const music = new Audio("/audio/battleThemeA.mp3");
+  const music = new Audio("/audio/battle_v2.m4a");
   music.loop = true;
   music.volume = 0.5;
   music.addEventListener("timeupdate", () => {
