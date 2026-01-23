@@ -53,6 +53,15 @@ When implementing features:
 
 ## Conversation Log
 
+### 2026-01-23
+- Wired up loadout models to BattleScene
+  - Units now spawn as 3D models (soldier/operator/medic) instead of placeholder boxes
+  - Team colors from loadout are applied to models (`TeamMain` material) and base indicators
+  - Unit customizations (body type, head, hair/eye/skin color, combat style, handedness) carry over
+  - Corner indicators and turn text use the team's selected color
+  - Removed test adventurer model code
+  - Fixed dist folder gitignore (was already tracked, now properly untracked)
+
 ### 2026-01-21
 - Started conversation logging in CLAUDE.md
 - Added team color selector to LoadoutScene

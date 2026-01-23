@@ -11,10 +11,35 @@ import {
   Mesh,
   PointerEventTypes,
   SceneLoader,
+  AbstractMesh,
+  AnimationGroup,
+  PBRMaterial,
 } from "@babylonjs/core";
 import "@babylonjs/loaders/glTF";
 import { AdvancedDynamicTexture, TextBlock, Button, Rectangle } from "@babylonjs/gui";
-import type { Loadout, UnitType, UnitSelection } from "../types";
+import type { Loadout, UnitType, UnitSelection, SupportCustomization } from "../types";
+
+// Color palettes (same as LoadoutScene)
+const SKIN_TONES = [
+  "#FFDFC4", "#E8C0A0", "#D0A080", "#B08060", "#906040",
+  "#704828", "#503418", "#352210", "#1E1208", "#0A0604",
+];
+const HAIR_COLORS = [
+  "#0A0A0A", "#4A3728", "#E5C8A8", "#B55239", "#C0C0C0",
+  "#FF2222", "#FF66AA", "#9933FF", "#22CC44", "#2288FF",
+];
+const EYE_COLORS = [
+  "#2288FF", "#22AA44", "#634E34", "#DD2222",
+  "#9933FF", "#FFFFFF", "#0A0A0A", "#FF8800",
+];
+
+// Helper to convert hex color to Color3
+function hexToColor3(hex: string): Color3 {
+  const r = parseInt(hex.slice(1, 3), 16) / 255;
+  const g = parseInt(hex.slice(3, 5), 16) / 255;
+  const b = parseInt(hex.slice(5, 7), 16) / 255;
+  return new Color3(r, g, b);
+}
 
 const GRID_SIZE = 8;
 const TILE_SIZE = 1;
@@ -51,6 +76,12 @@ interface Unit {
   speedBonus: number;  // Bonus from skipping, consumed after next turn
   accumulator: number; // Builds up until >= 10, then unit acts
   loadoutIndex: number; // Original position in loadout for tie-breaking
+  // 3D model data
+  modelRoot?: AbstractMesh;
+  modelMeshes?: AbstractMesh[];
+  animationGroups?: AnimationGroup[];
+  customization?: SupportCustomization;
+  teamColor: Color3;
 }
 
 export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, loadout: Loadout | null): Scene {
@@ -176,20 +207,63 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
   const defaultUnits: UnitSelection[] = [{ type: "tank" }, { type: "damage" }, { type: "support" }];
   const playerSelections = loadout?.player ?? defaultUnits;
   const enemySelections = loadout?.enemy ?? defaultUnits;
-  const playerUnits: UnitType[] = playerSelections.map(u => u.type);
-  const enemyUnits: UnitType[] = enemySelections.map(u => u.type);
 
-  // Spawn player units
-  for (let i = 0; i < playerUnits.length; i++) {
-    const pos = playerPositions[i];
-    units.push(createUnit(playerUnits[i], "player", pos.x, pos.z, scene, unitMaterials, gridOffset, gui, i));
+  // Get team colors from loadout or use defaults
+  const playerTeamColor = loadout?.playerTeamColor
+    ? hexToColor3(loadout.playerTeamColor)
+    : new Color3(0.2, 0.4, 0.9);  // Default blue
+  const enemyTeamColor = loadout?.enemyTeamColor
+    ? hexToColor3(loadout.enemyTeamColor)
+    : new Color3(0.9, 0.3, 0.2);  // Default red
+
+  // Spawn units asynchronously
+  async function spawnAllUnits(): Promise<void> {
+    // Spawn player units
+    for (let i = 0; i < playerSelections.length; i++) {
+      const pos = playerPositions[i];
+      const selection = playerSelections[i];
+      const unit = await createUnit(
+        selection.type,
+        "player",
+        pos.x,
+        pos.z,
+        scene,
+        unitMaterials,
+        gridOffset,
+        gui,
+        i,
+        playerTeamColor,
+        selection.customization
+      );
+      units.push(unit);
+    }
+
+    // Spawn enemy units
+    for (let i = 0; i < enemySelections.length; i++) {
+      const pos = enemyPositions[i];
+      const selection = enemySelections[i];
+      const unit = await createUnit(
+        selection.type,
+        "enemy",
+        pos.x,
+        pos.z,
+        scene,
+        unitMaterials,
+        gridOffset,
+        gui,
+        i,
+        enemyTeamColor,
+        selection.customization
+      );
+      units.push(unit);
+    }
+
+    // Start the game after all units are loaded
+    startGame();
   }
 
-  // Spawn enemy units
-  for (let i = 0; i < enemyUnits.length; i++) {
-    const pos = enemyPositions[i];
-    units.push(createUnit(enemyUnits[i], "enemy", pos.x, pos.z, scene, unitMaterials, gridOffset, gui, i));
-  }
+  // Start spawning (game will start when done)
+  spawnAllUnits();
 
   // Game state
   let selectedUnit: Unit | null = null;
@@ -217,9 +291,8 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
   function createCornerIndicators(unit: Unit): void {
     clearCornerIndicators();
 
-    const color = unit.team === "player"
-      ? new Color3(0.2, 0.5, 1.0)  // Blue for player
-      : new Color3(1.0, 0.3, 0.2); // Red for enemy
+    // Use the unit's team color
+    const color = unit.teamColor;
 
     cornerMaterial = new StandardMaterial("cornerMat", scene);
     cornerMaterial.diffuseColor = color;
@@ -292,13 +365,12 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
 
   // Animation loop for pulsing corners
   scene.onBeforeRenderObservable.add(() => {
-    if (cornerMaterial && cornerMeshes.length > 0) {
+    if (cornerMaterial && cornerMeshes.length > 0 && currentUnit) {
       pulseTime += engine.getDeltaTime() / 1000;
       const pulse = 0.5 + 0.5 * Math.sin(pulseTime * 4); // Pulse 4 times per second
 
-      const baseColor = currentUnit?.team === "player"
-        ? new Color3(0.2, 0.5, 1.0)
-        : new Color3(1.0, 0.3, 0.2);
+      // Use the current unit's team color
+      const baseColor = currentUnit.teamColor;
 
       cornerMaterial.emissiveColor = baseColor.scale(0.3 + pulse * 0.7);
     }
@@ -523,15 +595,27 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
   }
 
   function setUnitExhausted(unit: Unit): void {
-    // Fully desaturate the unit mesh (already acted)
-    const mat = unit.mesh.material as StandardMaterial;
-    const gray = (unit.originalColor.r + unit.originalColor.g + unit.originalColor.b) / 3;
-    mat.diffuseColor = new Color3(gray * 0.5, gray * 0.5, gray * 0.5);
-
-    // Dim the base
+    // Dim the base to indicate exhausted
     const baseMat = unit.baseMesh.material as StandardMaterial;
-    baseMat.diffuseColor = baseMat.diffuseColor.scale(0.4);
+    baseMat.diffuseColor = unit.teamColor.scale(0.3);
     baseMat.emissiveColor = new Color3(0, 0, 0);
+
+    // Dim the 3D model if present
+    if (unit.modelMeshes) {
+      unit.modelMeshes.forEach(mesh => {
+        if (mesh.material && (mesh.material as PBRMaterial).albedoColor) {
+          // Store original if not already stored, then dim
+          const mat = mesh.material as PBRMaterial;
+          if (!mesh.metadata?.originalAlbedo) {
+            mesh.metadata = mesh.metadata || {};
+            mesh.metadata.originalAlbedo = mat.albedoColor?.clone();
+          }
+          if (mat.albedoColor) {
+            mat.albedoColor = mat.albedoColor.scale(0.4);
+          }
+        }
+      });
+    }
   }
 
   function setUnitInactive(unit: Unit): void {
@@ -540,18 +624,32 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
   }
 
   function resetUnitAppearance(unit: Unit): void {
-    const mat = unit.mesh.material as StandardMaterial;
-    mat.diffuseColor = unit.team === "enemy"
-      ? unit.originalColor.scale(0.7)
-      : unit.originalColor.clone();
-
+    // Reset base to team color
     const baseMat = unit.baseMesh.material as StandardMaterial;
-    if (unit.team === "player") {
-      baseMat.diffuseColor = new Color3(0.2, 0.4, 0.9);
-      baseMat.emissiveColor = new Color3(0.1, 0.2, 0.4);
-    } else {
-      baseMat.diffuseColor = new Color3(0.9, 0.4, 0.2);
-      baseMat.emissiveColor = new Color3(0.4, 0.2, 0.1);
+    baseMat.diffuseColor = unit.teamColor;
+    baseMat.emissiveColor = unit.teamColor.scale(0.5);
+
+    // Reset 3D model materials
+    if (unit.modelMeshes && unit.customization) {
+      unit.modelMeshes.forEach(mesh => {
+        if (mesh.material) {
+          const mat = mesh.material as PBRMaterial;
+          const matName = mat.name;
+
+          // Restore original colors based on material type
+          if (matName === "MainSkin") {
+            mat.albedoColor = hexToColor3(SKIN_TONES[unit.customization!.skinTone] || SKIN_TONES[4]);
+          } else if (matName === "MainHair") {
+            mat.albedoColor = hexToColor3(HAIR_COLORS[unit.customization!.hairColor] || HAIR_COLORS[0]);
+          } else if (matName === "MainEye") {
+            mat.albedoColor = hexToColor3(EYE_COLORS[unit.customization!.eyeColor] || EYE_COLORS[2]);
+          } else if (matName === "TeamMain") {
+            mat.albedoColor = unit.teamColor;
+          } else if (mesh.metadata?.originalAlbedo) {
+            mat.albedoColor = mesh.metadata.originalAlbedo.clone();
+          }
+        }
+      });
     }
   }
 
@@ -579,6 +677,14 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
       defender.baseMesh.dispose();
       if (defender.hpBar) defender.hpBar.dispose();
       if (defender.hpBarBg) defender.hpBarBg.dispose();
+
+      // Dispose 3D model
+      if (defender.modelRoot) {
+        defender.modelRoot.dispose();
+      }
+      if (defender.animationGroups) {
+        defender.animationGroups.forEach(ag => ag.dispose());
+      }
 
       // Remove from units array
       const index = units.indexOf(defender);
@@ -654,11 +760,16 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
     if (!currentUnit) return;
 
     const teamName = currentUnit.team === "player" ? "Player 1" : "Player 2";
-    const teamColor = currentUnit.team === "player" ? "#4488ff" : "#ff8844";
+    // Convert Color3 to hex for GUI
+    const r = Math.round(currentUnit.teamColor.r * 255).toString(16).padStart(2, '0');
+    const g = Math.round(currentUnit.teamColor.g * 255).toString(16).padStart(2, '0');
+    const b = Math.round(currentUnit.teamColor.b * 255).toString(16).padStart(2, '0');
+    const teamColorHex = `#${r}${g}${b}`;
+
     const unitName = currentUnit.type.charAt(0).toUpperCase() + currentUnit.type.slice(1);
     const speedInfo = `(Spd: ${getEffectiveSpeed(currentUnit).toFixed(1)})`;
     turnText.text = `${teamName}'s ${unitName} ${speedInfo}`;
-    turnText.color = teamColor;
+    turnText.color = teamColorHex;
   }
 
   function canSelectUnit(unit: Unit): boolean {
@@ -707,7 +818,11 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
         }
       }
     } else if (metadata?.type === "unit") {
-      const clickedUnit = units.find(u => u.mesh === pickedMesh || u.baseMesh === pickedMesh);
+      const clickedUnit = units.find(u =>
+        u.mesh === pickedMesh ||
+        u.baseMesh === pickedMesh ||
+        u.modelMeshes?.includes(pickedMesh as AbstractMesh)
+      );
       if (!clickedUnit) return;
 
       if (selectedUnit) {
@@ -789,90 +904,7 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
   });
   gui.addControl(rotateRightBtn);
 
-  // Initialize the game
-  startGame();
-
-  // Test: Load adventurer model with weapon switching
-  SceneLoader.ImportMeshAsync("", "/models/", "AdventurerArmed.glb", scene).then((result) => {
-    console.log("Loaded meshes:", result.meshes.map(m => m.name));
-    console.log("Animations:", result.animationGroups.map(a => a.name));
-
-    // Position the model on the board (center-ish)
-    const root = result.meshes[0];
-    root.position = new Vector3(0, 0.1, 0);
-    root.scaling = new Vector3(0.6, 0.6, 0.6);
-
-    // Find weapon meshes by name (they're part of the model now)
-    const swordMeshes = result.meshes.filter(m => m.name.includes("Sword"));
-    const pistolMeshes = result.meshes.filter(m => m.name.includes("Pistol"));
-
-    console.log("Sword meshes found:", swordMeshes.map(m => m.name));
-    console.log("Pistol meshes found:", pistolMeshes.map(m => m.name));
-
-    // Helper to toggle weapon visibility
-    const showSword = (show: boolean) => {
-      swordMeshes.forEach(m => m.setEnabled(show));
-      pistolMeshes.forEach(m => m.setEnabled(!show));
-    };
-
-    // Start with pistol visible
-    let usingSword = false;
-    showSword(false);
-
-    // Get animations
-    const idleAnim = result.animationGroups.find(ag => ag.name === "Idle_Gun");
-    const swordSlashAnim = result.animationGroups.find(ag => ag.name === "Sword_Slash");
-    const gunShootAnim = result.animationGroups.find(ag => ag.name === "Gun_Shoot");
-
-    // Start with idle
-    result.animationGroups.forEach(ag => ag.stop());
-    idleAnim?.start(true);
-
-    // Toggle handedness on "H" key (default right-handed)
-    let leftHanded = false;
-    root.scaling.x = -0.6; // Start right-handed
-    window.addEventListener("keydown", (e) => {
-      if (e.key === "h" || e.key === "H") {
-        leftHanded = !leftHanded;
-        root.scaling.x = leftHanded ? 0.6 : -0.6;
-      }
-    });
-
-    // Toggle weapon on "T" key
-    window.addEventListener("keydown", (e) => {
-      if (e.key === "t" || e.key === "T") {
-        usingSword = !usingSword;
-        result.animationGroups.forEach(ag => ag.stop());
-
-        if (usingSword) {
-          showSword(true);
-          swordSlashAnim?.start(false); // Play once
-          swordSlashAnim?.onAnimationEndObservable.addOnce(() => {
-            const idleSword = result.animationGroups.find(ag => ag.name === "Idle_Sword");
-            idleSword?.start(true);
-          });
-        } else {
-          showSword(false);
-          gunShootAnim?.start(false); // Play once
-          gunShootAnim?.onAnimationEndObservable.addOnce(() => {
-            idleAnim?.start(true);
-          });
-        }
-      }
-    });
-
-    // Change green to blue for team color
-    result.meshes.forEach(mesh => {
-      if (mesh.material) {
-        const mat = mesh.material as any;
-        if (mat.name === "Green" || mat.name === "LightGreen") {
-          if (mat.albedoColor) {
-            mat.albedoColor = new Color3(0.2, 0.4, 0.9);
-          }
-        }
-      }
-    });
-  });
+  // Game is initialized when spawnAllUnits completes (calls startGame)
 
   return scene;
 }
@@ -883,25 +915,41 @@ function createUnitMaterial(name: string, color: Color3, scene: Scene): Standard
   return mat;
 }
 
-function createUnit(
+// Map unit types to model file names
+function getModelFileName(type: UnitType, isMale: boolean): string {
+  const gender = isMale ? "m" : "f";
+  switch (type) {
+    case "tank": return `soldier_${gender}.glb`;
+    case "damage": return `operator_${gender}.glb`;
+    case "support": return `medic_${gender}.glb`;
+  }
+}
+
+async function createUnit(
   type: "tank" | "damage" | "support",
   team: Team,
   gridX: number,
   gridZ: number,
   scene: Scene,
-  materials: Record<string, StandardMaterial>,
+  _materials: Record<string, StandardMaterial>,  // Kept for API compatibility
   gridOffset: number,
   gui: AdvancedDynamicTexture,
-  loadoutIndex: number
-): Unit {
+  loadoutIndex: number,
+  teamColor: Color3,
+  customization?: SupportCustomization
+): Promise<Unit> {
   const stats = UNIT_STATS[type];
-  const sizes = {
-    tank: { width: 0.7, height: 0.8, depth: 0.7 },
-    damage: { width: 0.5, height: 0.9, depth: 0.5 },
-    support: { width: 0.5, height: 0.7, depth: 0.5 },
-  };
 
-  const size = sizes[type];
+  // Default customization if not provided
+  const c: SupportCustomization = customization ?? {
+    body: "male",
+    combatStyle: "ranged",
+    handedness: "right",
+    head: 0,
+    hairColor: 0,
+    eyeColor: 2,
+    skinTone: 4,
+  };
 
   // Team indicator base
   const baseMesh = MeshBuilder.CreateCylinder(
@@ -910,36 +958,91 @@ function createUnit(
     scene
   );
   const baseMat = new StandardMaterial(`${team}BaseMat_${gridX}_${gridZ}`, scene);
-  baseMat.diffuseColor = team === "player" ? new Color3(0.2, 0.4, 0.9) : new Color3(0.9, 0.4, 0.2);
-  baseMat.emissiveColor = team === "player" ? new Color3(0.1, 0.2, 0.4) : new Color3(0.4, 0.2, 0.1);
+  baseMat.diffuseColor = teamColor;
+  baseMat.emissiveColor = teamColor.scale(0.5);
   baseMesh.material = baseMat;
   baseMesh.position = new Vector3(
     gridX * TILE_SIZE - gridOffset,
     0.1,
     gridZ * TILE_SIZE - gridOffset
   );
+  baseMesh.metadata = { type: "unit", unitType: type, team };
 
-  // Unit mesh
-  const mesh = MeshBuilder.CreateBox(`${team}_${type}_${gridX}_${gridZ}`, size, scene);
-  mesh.position = new Vector3(
+  // Load 3D model
+  const isMale = c.body === "male";
+  const modelFile = getModelFileName(type, isMale);
+  const result = await SceneLoader.ImportMeshAsync("", "/models/", modelFile, scene);
+
+  const modelRoot = result.meshes[0];
+  const modelMeshes = result.meshes;
+  const animationGroups = result.animationGroups;
+
+  // Position and scale the model
+  const modelScale = 0.5;
+  modelRoot.position = new Vector3(
     gridX * TILE_SIZE - gridOffset,
-    size.height / 2 + 0.14,
+    0.14,
     gridZ * TILE_SIZE - gridOffset
   );
+  modelRoot.scaling = new Vector3(
+    c.handedness === "right" ? -modelScale : modelScale,
+    modelScale,
+    modelScale
+  );
 
-  const originalColor = materials[type].diffuseColor.clone();
-
-  if (team === "enemy") {
-    const enemyMat = materials[type].clone(`${type}_enemy_${gridX}_${gridZ}`);
-    enemyMat.diffuseColor = originalColor.scale(0.7);
-    mesh.material = enemyMat;
-  } else {
-    const playerMat = materials[type].clone(`${type}_player_${gridX}_${gridZ}`);
-    mesh.material = playerMat;
+  // Apply customizations to the model
+  // Head visibility
+  for (let i = 0; i < 4; i++) {
+    const headName = `Head_00${i + 1}`;
+    const headMeshes = modelMeshes.filter(m => m.name.includes(headName));
+    headMeshes.forEach(mesh => mesh.setEnabled(i === c.head));
   }
 
-  mesh.metadata = { type: "unit", unitType: type, team };
-  baseMesh.metadata = { type: "unit", unitType: type, team };
+  // Weapon visibility based on combat style
+  const swordMeshes = modelMeshes.filter(m => m.name.toLowerCase().includes("sword"));
+  const pistolMeshes = modelMeshes.filter(m => m.name.toLowerCase().includes("pistol"));
+  const isMelee = c.combatStyle === "melee";
+  swordMeshes.forEach(m => m.setEnabled(isMelee));
+  pistolMeshes.forEach(m => m.setEnabled(!isMelee));
+
+  // Apply colors to materials
+  modelMeshes.forEach(mesh => {
+    if (!mesh.material) return;
+    const mat = mesh.material as PBRMaterial;
+    const matName = mat.name;
+
+    if (matName === "MainSkin") {
+      mat.albedoColor = hexToColor3(SKIN_TONES[c.skinTone] || SKIN_TONES[4]);
+    } else if (matName === "MainHair") {
+      mat.albedoColor = hexToColor3(HAIR_COLORS[c.hairColor] || HAIR_COLORS[0]);
+    } else if (matName === "MainEye") {
+      mat.albedoColor = hexToColor3(EYE_COLORS[c.eyeColor] || EYE_COLORS[2]);
+    } else if (matName === "TeamMain") {
+      mat.albedoColor = teamColor;
+    }
+  });
+
+  // Set metadata for click detection
+  modelMeshes.forEach(mesh => {
+    mesh.metadata = { type: "unit", unitType: type, team };
+  });
+
+  // Start idle animation
+  animationGroups.forEach(ag => ag.stop());
+  const idleAnim = isMelee
+    ? animationGroups.find(ag => ag.name === "Idle_Sword")
+    : animationGroups.find(ag => ag.name === "Idle_Gun");
+  idleAnim?.start(true);
+
+  // Create an invisible mesh for HP bar linkage (positioned at model's head height)
+  const hpBarAnchor = MeshBuilder.CreateBox(`${team}_${type}_anchor_${gridX}_${gridZ}`, { size: 0.01 }, scene);
+  hpBarAnchor.position = new Vector3(
+    gridX * TILE_SIZE - gridOffset,
+    1.2,  // Approximate head height
+    gridZ * TILE_SIZE - gridOffset
+  );
+  hpBarAnchor.isVisible = false;
+  hpBarAnchor.metadata = { type: "unit", unitType: type, team };
 
   // HP bar background
   const hpBarBg = new Rectangle();
@@ -949,7 +1052,7 @@ function createUnit(
   hpBarBg.thickness = 1;
   hpBarBg.color = "#000000";
   gui.addControl(hpBarBg);
-  hpBarBg.linkWithMesh(mesh);
+  hpBarBg.linkWithMesh(hpBarAnchor);
   hpBarBg.linkOffsetY = -50;
 
   // HP bar fill
@@ -961,8 +1064,10 @@ function createUnit(
   hpBar.left = "2px";
   hpBarBg.addControl(hpBar);
 
+  const originalColor = teamColor.clone();
+
   return {
-    mesh,
+    mesh: hpBarAnchor,  // Use anchor as the main "mesh" for positioning
     baseMesh,
     type,
     team,
@@ -983,6 +1088,11 @@ function createUnit(
     speedBonus: 0,
     accumulator: 0,
     loadoutIndex,
+    modelRoot,
+    modelMeshes,
+    animationGroups,
+    customization: c,
+    teamColor,
   };
 }
 
@@ -990,15 +1100,17 @@ function moveUnit(unit: Unit, newX: number, newZ: number, gridOffset: number): v
   unit.gridX = newX;
   unit.gridZ = newZ;
 
-  const height = unit.mesh.getBoundingInfo().boundingBox.extendSize.y;
-  unit.mesh.position = new Vector3(
-    newX * TILE_SIZE - gridOffset,
-    height + 0.14,
-    newZ * TILE_SIZE - gridOffset
-  );
-  unit.baseMesh.position = new Vector3(
-    newX * TILE_SIZE - gridOffset,
-    0.1,
-    newZ * TILE_SIZE - gridOffset
-  );
+  const newPosX = newX * TILE_SIZE - gridOffset;
+  const newPosZ = newZ * TILE_SIZE - gridOffset;
+
+  // Move HP bar anchor
+  unit.mesh.position = new Vector3(newPosX, 1.2, newPosZ);
+
+  // Move base
+  unit.baseMesh.position = new Vector3(newPosX, 0.1, newPosZ);
+
+  // Move 3D model
+  if (unit.modelRoot) {
+    unit.modelRoot.position = new Vector3(newPosX, 0.14, newPosZ);
+  }
 }
