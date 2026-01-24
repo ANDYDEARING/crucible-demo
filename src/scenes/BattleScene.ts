@@ -218,10 +218,28 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
   const terrainTiles: Set<string> = new Set();
 
   // Starting positions to avoid
-  const reservedPositions = new Set([
-    "1,1", "3,0", "5,1",  // Player 1 spawns
-    "6,6", "4,7", "2,6",  // Player 2 spawns
-  ]);
+  const spawnPositions = [
+    { x: 1, z: 1 }, { x: 3, z: 0 }, { x: 5, z: 1 },  // Player 1 spawns
+    { x: 6, z: 6 }, { x: 4, z: 7 }, { x: 2, z: 6 },  // Player 2 spawns
+  ];
+  const reservedPositions = new Set(spawnPositions.map(p => `${p.x},${p.z}`));
+
+  // Check if all spawn positions have at least one adjacent walkable tile
+  function allSpawnsHaveExit(blocked: Set<string>): boolean {
+    for (const spawn of spawnPositions) {
+      const adjacent = [
+        { x: spawn.x - 1, z: spawn.z },
+        { x: spawn.x + 1, z: spawn.z },
+        { x: spawn.x, z: spawn.z - 1 },
+        { x: spawn.x, z: spawn.z + 1 },
+      ];
+      const hasExit = adjacent.some(({ x, z }) =>
+        x >= 0 && x < GRID_SIZE && z >= 0 && z < GRID_SIZE && !blocked.has(`${x},${z}`)
+      );
+      if (!hasExit) return false;
+    }
+    return true;
+  }
 
   // Check if a path exists from bottom row (z=0) to top row (z=7) avoiding terrain
   function hasPathBetweenRows(blocked: Set<string>): boolean {
@@ -345,8 +363,8 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
         }
       }
 
-      // Validate: must have at least 2 distinct paths
-      if (hasMultiplePaths(testTerrain)) {
+      // Validate: must have at least 2 distinct paths AND no blocked-in spawns
+      if (hasMultiplePaths(testTerrain) && allSpawnsHaveExit(testTerrain)) {
         // Valid configuration - add to actual terrain set
         for (const key of testTerrain) {
           terrainTiles.add(key);
@@ -1573,31 +1591,42 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
     }
   }
 
+  // Helper to apply conceal visual (semi-transparent with team color tint)
+  function applyConcealVisual(unit: Unit): void {
+    if (unit.modelMeshes) {
+      unit.modelMeshes.forEach(mesh => {
+        if (mesh.material) {
+          const mat = mesh.material as PBRMaterial;
+          mat.alpha = 0.4;
+          // Add team color emissive tint
+          mat.emissiveColor = unit.teamColor.scale(0.4);
+        }
+      });
+    }
+  }
+
+  // Helper to remove conceal visual
+  function removeConcealVisual(unit: Unit): void {
+    if (unit.modelMeshes) {
+      unit.modelMeshes.forEach(mesh => {
+        if (mesh.material) {
+          const mat = mesh.material as PBRMaterial;
+          mat.alpha = 1.0;
+          mat.emissiveColor = Color3.Black();
+        }
+      });
+    }
+  }
+
   // Toggle Conceal for Operator (damage type)
   function toggleConceal(unit: Unit): void {
     unit.isConcealed = !unit.isConcealed;
 
     if (unit.isConcealed) {
-      // Make model semi-transparent
-      if (unit.modelMeshes) {
-        unit.modelMeshes.forEach(mesh => {
-          if (mesh.material) {
-            (mesh.material as PBRMaterial).alpha = 0.4;
-          }
-        });
-      }
-
+      applyConcealVisual(unit);
       console.log(`${unit.team} ${unit.unitClass} activates Conceal!`);
     } else {
-      // Restore full visibility
-      if (unit.modelMeshes) {
-        unit.modelMeshes.forEach(mesh => {
-          if (mesh.material) {
-            (mesh.material as PBRMaterial).alpha = 1.0;
-          }
-        });
-      }
-
+      removeConcealVisual(unit);
       console.log(`${unit.team} ${unit.unitClass} deactivates Conceal.`);
     }
 
@@ -1909,7 +1938,13 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
 
   // Check if a unit triggers cover reaction and execute it
   // Returns true if cover was triggered (caller should end turn)
+  // Concealed units do not trigger cover at all
   function checkAndTriggerCoverReaction(targetUnit: Unit, onComplete: () => void): boolean {
+    // Concealed units don't trigger cover
+    if (targetUnit.isConcealed) {
+      return false;
+    }
+
     const coveringUnit = getEnemyCoveringTile(targetUnit.gridX, targetUnit.gridZ, targetUnit);
     if (!coveringUnit) {
       return false;
@@ -2132,7 +2167,7 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
     gui.addControl(overlay);
 
     const container = new StackPanel();
-    container.width = "400px";
+    container.width = "600px";
     container.height = "200px";
     overlay.addControl(container);
 
@@ -2146,6 +2181,7 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
     text.text = `${winnerName} Wins!`;
     text.color = colorHex;
     text.fontSize = 72;
+    text.width = "100%";
     text.height = "100px";
     text.fontWeight = "bold";
     container.addControl(text);
@@ -2427,6 +2463,7 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
 
     // Helper to check cover reaction after an action completes
     // If cover is triggered, ends turn immediately; otherwise continues to next action
+    // Concealed units do not trigger cover
     function afterActionWithCoverCheck(nextIndex: number): void {
       // Check if the acting unit is in a covered tile
       if (unit.hp > 0) {  // Only check if unit is still alive
@@ -2522,17 +2559,12 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
       // Check if defender is concealed
       if (defender.isConcealed) {
         defender.isConcealed = false;
-        if (defender.modelMeshes) {
-          defender.modelMeshes.forEach(mesh => {
-            if (mesh.material) {
-              (mesh.material as PBRMaterial).alpha = 1.0;
-            }
-          });
-        }
+        removeConcealVisual(defender);
         console.log(`${defender.team} ${defender.unitClass}'s Conceal was broken! Damage negated!`);
-        if (attacker.unitClass === "medic") playSfx(sfx.hitLight);
-        else if (attacker.unitClass === "soldier") playSfx(sfx.hitMedium);
-        else if (attacker.unitClass === "operator") playSfx(sfx.hitHeavy);
+        // Hit sounds based on weapon type
+        const isMeleeAttack = attacker.customization?.combatStyle === "melee";
+        if (isMeleeAttack) playSfx(sfx.hitHeavy);
+        else playSfx(sfx.hitMedium);
 
         playAnimation(defender, "HitRecieve", false, () => {
           playIdleAnimation(defender);
@@ -2541,13 +2573,15 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
         return;
       }
 
-      // Apply damage
-      defender.hp -= attacker.attack;
-      console.log(`${attacker.team} ${attacker.unitClass} attacks ${defender.team} ${defender.unitClass} for ${attacker.attack} damage! (${defender.hp}/${defender.maxHp} HP)`);
+      // Apply damage (melee does 2x damage)
+      const isMeleeAttack = attacker.customization?.combatStyle === "melee";
+      const damage = isMeleeAttack ? attacker.attack * 2 : attacker.attack;
+      defender.hp -= damage;
+      console.log(`${attacker.team} ${attacker.unitClass} attacks ${defender.team} ${defender.unitClass} for ${damage} damage! (${defender.hp}/${defender.maxHp} HP)`);
 
-      if (attacker.unitClass === "medic") playSfx(sfx.hitLight);
-      else if (attacker.unitClass === "soldier") playSfx(sfx.hitMedium);
-      else if (attacker.unitClass === "operator") playSfx(sfx.hitHeavy);
+      // Hit sounds based on weapon type
+      if (isMeleeAttack) playSfx(sfx.hitHeavy);
+      else playSfx(sfx.hitMedium);
 
       updateHpBar(defender);
 
@@ -2622,24 +2656,10 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
     unit.isConcealed = !unit.isConcealed;
 
     if (unit.isConcealed) {
-      // Make model semi-transparent
-      if (unit.modelMeshes) {
-        unit.modelMeshes.forEach(mesh => {
-          if (mesh.material) {
-            (mesh.material as PBRMaterial).alpha = 0.4;
-          }
-        });
-      }
+      applyConcealVisual(unit);
       console.log(`${unit.team} ${unit.unitClass} activates Conceal!`);
     } else {
-      // Restore full visibility
-      if (unit.modelMeshes) {
-        unit.modelMeshes.forEach(mesh => {
-          if (mesh.material) {
-            (mesh.material as PBRMaterial).alpha = 1.0;
-          }
-        });
-      }
+      removeConcealVisual(unit);
       console.log(`${unit.team} ${unit.unitClass} deactivates Conceal.`);
     }
 
@@ -3129,6 +3149,12 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
       abilityBtn.textBlock.text = classData.ability;
     }
 
+    // Update attack button based on combat style
+    if (attackBtn.textBlock) {
+      const isMelee = currentUnit.customization?.combatStyle === "melee";
+      attackBtn.textBlock.text = isMelee ? "Strike" : "Shoot";
+    }
+
     // Update actions text from turnState
     const remaining = turnState?.actionsRemaining ?? 0;
     menuActionsText.text = `Actions: ${remaining}/2`;
@@ -3153,7 +3179,9 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
           lines.push(`  Move to (${action.targetX},${action.targetZ})`);
         } else if (action.type === "attack" && action.targetUnit) {
           const targetName = getClassData(action.targetUnit.unitClass).name;
-          lines.push(`  Attack ${targetName}`);
+          const isMelee = currentUnit.customization?.combatStyle === "melee";
+          const attackVerb = isMelee ? "Strike" : "Shoot";
+          lines.push(`  ${attackVerb} ${targetName}`);
         } else if (action.type === "ability" && action.abilityName === "heal" && action.targetUnit) {
           const targetName = action.targetUnit === currentUnit ? "self" : getClassData(action.targetUnit.unitClass).name;
           lines.push(`  Heal ${targetName}`);

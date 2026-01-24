@@ -888,19 +888,19 @@ export function createLoadoutScene(
 
       if (selectedClass === "soldier") {
         fluff = `Soldiers are the backbone of settlement defense. Drawn from Earth's militaries and security forces, they volunteered to protect humanity's last hope. Where others see danger, ${pronoun} sees a perimeter to hold.`;
-        ability = `[COVER]\nWhen activated, if an enemy ends their move within attack range, the Soldier strikes first with a devastating counter attack.`;
+        ability = `[COVER]\nWhen activated, enemies that finish any action in a covered square are counter attacked, interrupting their remaining actions. Concealed enemies do not trigger Cover. Cover ends after a counter attack or if this unit is hit.`;
       } else if (selectedClass === "operator") {
         fluff = `Operators work beyond the settlement walls where survival demands cunning over strength. Whether scouting hostile terrain or eliminating threats before they reach the settlement, ${pronoun} is the unseen blade that keeps the settlement safe.`;
-        ability = `[CONCEAL]\nWhen activated, the next incoming hit is completely negated, allowing ${pronounObj} to survive otherwise fatal encounters.`;
+        ability = `[CONCEAL]\nWhen activated, the next incoming hit is completely negated, and ${pronoun} won't trigger enemy Cover. Allows ${pronounObj} to survive otherwise fatal encounters or slip past defended positions.`;
       } else if (selectedClass === "medic") {
         fluff = `In a settlement where every life is precious, Medics are revered. Trained in both trauma care and combat medicine, ${pronoun} keeps the team fighting when the odds turn grim.`;
         ability = `[HEAL]\nSelect self or an ally to restore HP. The difference between victory and defeat often comes down to keeping the right person standing.`;
       }
 
       if (isMelee) {
-        weapon = `[MELEE]\nAttacks and counter attacks in ordinal directions, one space away within line of sight. Best for holding chokepoints.`;
+        weapon = `[MELEE]\nDeals 2x damage. Attacks in ordinal directions, one space away within line of sight. Best for holding chokepoints.`;
       } else {
-        weapon = `[RANGED]\nAttacks and counter attacks anywhere within line of sight, except adjacent ordinal spaces. Optimal for controlling the battlefield from a distance.`;
+        weapon = `[RANGED]\nAttacks anywhere within line of sight, except adjacent ordinal spaces. Optimal for controlling the battlefield from a distance.`;
       }
 
       descriptionText.text = `${fluff}\n\n${ability}\n\n${weapon}`;
