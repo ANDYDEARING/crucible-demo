@@ -74,7 +74,6 @@ interface TurnState {
 
 interface Unit {
   mesh: Mesh;
-  baseMesh: Mesh;
   type: "tank" | "damage" | "support";
   team: Team;
   gridX: number;
@@ -263,9 +262,18 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
     // Calculate angle (0 = +Z direction, clockwise)
     unit.facing = Math.atan2(dx, dz);
 
-    // Apply to model
+    // Apply to model - MUST clear rotationQuaternion first (GLTF uses quaternions which override Euler)
     if (unit.modelRoot) {
-      unit.modelRoot.rotation.y = unit.facing;
+      unit.modelRoot.rotationQuaternion = null;
+
+      // Account for negative X scale (handedness flip) which inverts rotation
+      const isFlipped = unit.customization?.handedness === "right";
+      if (isFlipped) {
+        // When X scale is negative, we need to negate the rotation
+        unit.modelRoot.rotation.y = -unit.facing;
+      } else {
+        unit.modelRoot.rotation.y = unit.facing;
+      }
     }
   }
 
@@ -283,9 +291,10 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
   // LINE OF SIGHT SYSTEM
   // ============================================
 
-  function hasLineOfSight(fromX: number, fromZ: number, toX: number, toZ: number): boolean {
+  function hasLineOfSight(fromX: number, fromZ: number, toX: number, toZ: number, excludeUnit?: Unit): boolean {
     // Bresenham's line algorithm to check tiles between from and to
     // Returns false if any occupied tile (other than start/end) blocks the line
+    // excludeUnit: optionally exclude a specific unit from blocking (usually the shooter)
 
     const dx = Math.abs(toX - fromX);
     const dz = Math.abs(toZ - fromZ);
@@ -311,8 +320,8 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
       // Skip checking the destination tile
       if (x === toX && z === toZ) break;
 
-      // Check if this tile is occupied (blocking LOS)
-      const occupant = units.find(u => u.gridX === x && u.gridZ === z && u.hp > 0);
+      // Check if this tile is occupied (blocking LOS), excluding the specified unit
+      const occupant = units.find(u => u.gridX === x && u.gridZ === z && u.hp > 0 && u !== excludeUnit);
       if (occupant) {
         return false;
       }
@@ -321,7 +330,7 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
     return true;
   }
 
-  function getTilesInLOS(fromX: number, fromZ: number, excludeAdjacent: boolean): { x: number; z: number }[] {
+  function getTilesInLOS(fromX: number, fromZ: number, excludeAdjacent: boolean, excludeUnit?: Unit): { x: number; z: number }[] {
     const result: { x: number; z: number }[] = [];
 
     for (let x = 0; x < GRID_SIZE; x++) {
@@ -333,7 +342,7 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
         // If excluding adjacent (for guns), skip distance 1
         if (excludeAdjacent && distance === 1) continue;
 
-        if (hasLineOfSight(fromX, fromZ, x, z)) {
+        if (hasLineOfSight(fromX, fromZ, x, z, excludeUnit)) {
           result.push({ x, z });
         }
       }
@@ -389,7 +398,8 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
           const distance = Math.abs(tx - x) + Math.abs(tz - z);
           if (distance === 1) continue;  // Skip adjacent
 
-          const hasLOS = hasLineOfSight(x, z, tx, tz);
+          // Exclude the shooter from blocking their own LOS
+          const hasLOS = hasLineOfSight(x, z, tx, tz, unit);
           losResult.push({ x: tx, z: tz, hasLOS });
         }
       }
@@ -439,7 +449,7 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
     playAnimation(unit, "Run", true);
 
     // Animate over time
-    const duration = 0.4;  // seconds
+    const duration = 0.8;  // seconds (doubled for better visibility)
     let elapsed = 0;
 
     const moveObserver = scene.onBeforeRenderObservable.add(() => {
@@ -455,8 +465,6 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
       // Update all mesh positions
       unit.modelRoot!.position.x = currentX;
       unit.modelRoot!.position.z = currentZ;
-      unit.baseMesh.position.x = currentX;
-      unit.baseMesh.position.z = currentZ;
       unit.mesh.position.x = currentX;
       unit.mesh.position.z = currentZ;
 
@@ -470,8 +478,6 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
         const finalZ = endZ;
         unit.modelRoot!.position.x = finalX;
         unit.modelRoot!.position.z = finalZ;
-        unit.baseMesh.position.x = finalX;
-        unit.baseMesh.position.z = finalZ;
         unit.mesh.position.x = finalX;
         unit.mesh.position.z = finalZ;
 
@@ -727,6 +733,44 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
     }
   });
 
+  // ============================================
+  // ROTATION TESTING JIG
+  // ============================================
+  let rotationTestStrategy: "none" | "A" | "B" = "none";
+  let rotationTestTime = 0;
+
+  // Keyboard listener for rotation test
+  window.addEventListener("keydown", (e) => {
+    if (e.key === "1") {
+      rotationTestStrategy = rotationTestStrategy === "A" ? "none" : "A";
+      console.log(`Rotation strategy: ${rotationTestStrategy} (modelRoot.rotation.y)`);
+    } else if (e.key === "2") {
+      rotationTestStrategy = rotationTestStrategy === "B" ? "none" : "B";
+      console.log(`Rotation strategy: ${rotationTestStrategy} (modelRoot.rotationQuaternion)`);
+    }
+  });
+
+  // Continuous rotation in render loop
+  scene.onBeforeRenderObservable.add(() => {
+    if (rotationTestStrategy === "none") return;
+
+    rotationTestTime += engine.getDeltaTime() / 1000;
+    const angle = rotationTestTime * 2; // 2 radians per second
+
+    for (const unit of units) {
+      if (!unit.modelRoot) continue;
+
+      if (rotationTestStrategy === "A") {
+        // Strategy A: Direct rotation.y assignment
+        unit.modelRoot.rotation.y = angle;
+      } else if (rotationTestStrategy === "B") {
+        // Strategy B: Clear quaternion first, then set rotation.y
+        unit.modelRoot.rotationQuaternion = null;
+        unit.modelRoot.rotation.y = angle;
+      }
+    }
+  });
+
   function buildFirstRoundQueue(): void {
     // Alternate teams: P1, P2, P1, P2, P1, P2
     // Within team, use loadout order
@@ -930,12 +974,13 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
 
   function getHealableAllies(unit: Unit): Unit[] {
     // Only support can heal, needs actions remaining
+    // Heal is adjacent only (distance <= 1, including self)
     if (unit.healAmount <= 0 || !hasActionsRemaining()) return [];
     return units.filter(u => {
       if (u.team !== unit.team) return false; // Must be same team
       if (u.hp >= u.maxHp) return false; // Already at full health
       const distance = Math.abs(u.gridX - unit.gridX) + Math.abs(u.gridZ - unit.gridZ);
-      return distance <= unit.attackRange; // Uses attack range for heal range
+      return distance <= 1; // Self (0) or adjacent (1) only
     });
   }
 
@@ -1074,9 +1119,6 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
           }
         });
       }
-      // Make base semi-transparent
-      const baseMat = unit.baseMesh.material as StandardMaterial;
-      baseMat.alpha = 0.5;
 
       console.log(`${unit.team} ${unit.type} activates Conceal!`);
     } else {
@@ -1088,8 +1130,6 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
           }
         });
       }
-      const baseMat = unit.baseMesh.material as StandardMaterial;
-      baseMat.alpha = 1.0;
 
       console.log(`${unit.team} ${unit.type} deactivates Conceal.`);
     }
@@ -1137,7 +1177,7 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
         coveredTiles = getAdjacentOrdinalTiles(unit.gridX, unit.gridZ);
       } else {
         // Gun: Cover all tiles in LOS that they could shoot (not adjacent)
-        coveredTiles = getTilesInLOS(unit.gridX, unit.gridZ, true);
+        coveredTiles = getTilesInLOS(unit.gridX, unit.gridZ, true, unit);
       }
 
       // Create pulsing border visualization for covered tiles
@@ -1225,12 +1265,7 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
   }
 
   function setUnitExhausted(unit: Unit): void {
-    // Dim the base to indicate exhausted
-    const baseMat = unit.baseMesh.material as StandardMaterial;
-    baseMat.diffuseColor = unit.teamColor.scale(0.3);
-    baseMat.emissiveColor = new Color3(0, 0, 0);
-
-    // Dim the 3D model if present
+    // Dim the 3D model to indicate exhausted
     if (unit.modelMeshes) {
       unit.modelMeshes.forEach(mesh => {
         if (mesh.material && (mesh.material as PBRMaterial).albedoColor) {
@@ -1254,11 +1289,6 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
   }
 
   function resetUnitAppearance(unit: Unit): void {
-    // Reset base to team color
-    const baseMat = unit.baseMesh.material as StandardMaterial;
-    baseMat.diffuseColor = unit.teamColor;
-    baseMat.emissiveColor = unit.teamColor.scale(0.5);
-
     // Reset 3D model materials
     if (unit.modelMeshes && unit.customization) {
       unit.modelMeshes.forEach(mesh => {
@@ -1283,187 +1313,73 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
     }
   }
 
-  function attackUnit(attacker: Unit, defender: Unit): void {
-    // Face the defender
-    setUnitFacing(attacker, defender.gridX, defender.gridZ);
-
-    // Play attack animation based on combat style
-    const isMelee = attacker.customization?.combatStyle === "melee";
-    const attackAnim = isMelee ? "Sword_Slash" : "Gun_Shoot";
-
-    playAnimation(attacker, attackAnim, false, () => {
-      // Return to idle after attack
-      playIdleAnimation(attacker);
-    });
-
-    // Check if defender is concealed - break concealment and negate damage
-    if (defender.isConcealed) {
-      defender.isConcealed = false;
-      // Restore visibility
-      if (defender.modelMeshes) {
-        defender.modelMeshes.forEach(mesh => {
-          if (mesh.material) {
-            (mesh.material as PBRMaterial).alpha = 1.0;
-          }
-        });
-      }
-      const defenderBaseMat = defender.baseMesh.material as StandardMaterial;
-      defenderBaseMat.alpha = 1.0;
-
-      console.log(`${defender.team} ${defender.type}'s Conceal was broken! Damage negated!`);
-      // Play hit sound but no damage
-      if (attacker.type === "support") {
-        playSfx(sfx.hitLight);
-      } else if (attacker.type === "tank") {
-        playSfx(sfx.hitMedium);
-      } else if (attacker.type === "damage") {
-        playSfx(sfx.hitHeavy);
-      }
-
-      // Play hit receive animation without damage
-      playAnimation(defender, "HitReceive", false, () => {
-        playIdleAnimation(defender);
-      });
-
-      consumeAction();
-      return;
-    }
-
-    // Apply damage
-    defender.hp -= attacker.attack;
-    console.log(`${attacker.team} ${attacker.type} attacks ${defender.team} ${defender.type} for ${attacker.attack} damage! (${defender.hp}/${defender.maxHp} HP)`);
-
-    // Play hit sound based on attacker type
-    if (attacker.type === "support") {
-      playSfx(sfx.hitLight);
-    } else if (attacker.type === "tank") {
-      playSfx(sfx.hitMedium);
-    } else if (attacker.type === "damage") {
-      playSfx(sfx.hitHeavy);
-    }
-
-    consumeAction();
-
-    updateHpBar(defender);
-
-    if (defender.hp <= 0) {
-      console.log(`${defender.team} ${defender.type} was defeated!`);
-
-      // Clear cover visualization if they were covering
-      if (defender.isCovering) {
-        defender.isCovering = false;
-        clearCoverVisualization();
-      }
-
-      // Play death animation before disposing
-      playAnimation(defender, "Death", false, () => {
-        defender.mesh.dispose();
-        defender.baseMesh.dispose();
-        if (defender.hpBar) defender.hpBar.dispose();
-        if (defender.hpBarBg) defender.hpBarBg.dispose();
-
-        // Dispose 3D model
-        if (defender.modelRoot) {
-          defender.modelRoot.dispose();
-        }
-        if (defender.animationGroups) {
-          defender.animationGroups.forEach(ag => ag.dispose());
-        }
-      });
-
-      // Remove from units array immediately (for game logic)
-      const index = units.indexOf(defender);
-      if (index > -1) units.splice(index, 1);
-
-      // Remove from first round queue if still in first round
-      const queueIndex = firstRoundQueue.indexOf(defender);
-      if (queueIndex > -1) {
-        firstRoundQueue.splice(queueIndex, 1);
-      }
-
-      checkWinCondition();
-    } else {
-      // Play hit receive animation
-      playAnimation(defender, "HitReceive", false, () => {
-        playIdleAnimation(defender);
-      });
-    }
-  }
-
-  function healUnit(healer: Unit, target: Unit): void {
-    // Face the target
-    if (healer !== target) {
-      setUnitFacing(healer, target.gridX, target.gridZ);
-    }
-
-    // Hide weapons for heal animation
-    if (healer.modelMeshes) {
-      const weaponMeshes = healer.modelMeshes.filter(m =>
-        m.name.toLowerCase().includes("sword") || m.name.toLowerCase().includes("pistol")
-      );
-      weaponMeshes.forEach(m => m.setEnabled(false));
-
-      // Play interact animation
-      playAnimation(healer, "Interact", false, () => {
-        // Show weapons again
-        const isMelee = healer.customization?.combatStyle === "melee";
-        healer.modelMeshes?.forEach(m => {
-          if (m.name.toLowerCase().includes("sword")) {
-            m.setEnabled(isMelee);
-          } else if (m.name.toLowerCase().includes("pistol")) {
-            m.setEnabled(!isMelee);
-          }
-        });
-        playIdleAnimation(healer);
-      });
-    }
-
-    const healedAmount = Math.min(healer.healAmount, target.maxHp - target.hp);
-    target.hp += healedAmount;
-    console.log(`${healer.team} ${healer.type} heals ${target.team} ${target.type} for ${healedAmount} HP! (${target.hp}/${target.maxHp} HP)`);
-
-    playSfx(sfx.heal);
-
-    consumeAction();
-
-    updateHpBar(target);
-  }
-
   function checkWinCondition(): void {
     const playerUnits = units.filter(u => u.team === "player");
     const enemyUnits = units.filter(u => u.team === "enemy");
 
     if (enemyUnits.length === 0) {
       gameOver = true;
-      showGameOver("VICTORY!");
+      showGameOver(playerTeamColor, "Player 1");
     } else if (playerUnits.length === 0) {
       gameOver = true;
-      showGameOver("DEFEAT");
+      showGameOver(enemyTeamColor, "Player 2");
     }
   }
 
-  function showGameOver(message: string): void {
+  function showGameOver(winningColor: Color3, winnerName: string): void {
     const overlay = new Rectangle();
     overlay.width = "100%";
     overlay.height = "100%";
     overlay.background = "rgba(0,0,0,0.7)";
     gui.addControl(overlay);
 
+    const container = new StackPanel();
+    container.width = "400px";
+    container.height = "200px";
+    overlay.addControl(container);
+
+    // Convert Color3 to hex
+    const r = Math.round(winningColor.r * 255).toString(16).padStart(2, '0');
+    const g = Math.round(winningColor.g * 255).toString(16).padStart(2, '0');
+    const b = Math.round(winningColor.b * 255).toString(16).padStart(2, '0');
+    const colorHex = `#${r}${g}${b}`;
+
     const text = new TextBlock();
-    text.text = message;
-    text.color = message === "VICTORY!" ? "#44ff44" : "#ff4444";
+    text.text = `${winnerName} Wins!`;
+    text.color = colorHex;
     text.fontSize = 72;
-    overlay.addControl(text);
+    text.height = "100px";
+    text.fontWeight = "bold";
+    container.addControl(text);
+
+    // Back to loadout button
+    const backBtn = Button.CreateSimpleButton("backBtn", "Back to Loadout");
+    backBtn.width = "200px";
+    backBtn.height = "50px";
+    backBtn.color = "white";
+    backBtn.background = "#444444";
+    backBtn.cornerRadius = 10;
+    backBtn.fontSize = 18;
+    backBtn.onPointerClickObservable.add(() => {
+      // Import dynamically to avoid circular dependency
+      import("../main").then(main => {
+        main.switchToLoadout();
+      });
+    });
+    container.addControl(backBtn);
   }
 
   function updateHpBar(unit: Unit): void {
     if (unit.hpBar) {
       const hpPercent = Math.max(0, unit.hp / unit.maxHp);
       unit.hpBar.width = `${30 * hpPercent}px`;
+      // Always update color based on current HP percentage
       if (hpPercent < 0.3) {
         unit.hpBar.background = "#ff4444";
       } else if (hpPercent < 0.6) {
         unit.hpBar.background = "#ffaa44";
+      } else {
+        unit.hpBar.background = "#44ff44";  // Green when healthy
       }
     }
   }
@@ -1537,45 +1453,266 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
     attackPreviewTiles = [];
   }
 
-  // Hover handling for shadow preview
-  scene.onPointerObservable.add((pointerInfo) => {
-    if (gameOver || isAnimatingMovement) return;
-    if (pointerInfo.type !== PointerEventTypes.POINTERMOVE) return;
-    if (currentActionMode !== "move" || !selectedUnit) return;
+  // Hover handling removed - mobile-focused, select only
+  // Shadow preview now only appears when a move tile is clicked
 
-    const pickResult = scene.pick(scene.pointerX, scene.pointerY);
-    if (!pickResult?.pickedMesh) {
-      clearShadowPreview();
-      clearAttackPreview();
-      shadowPosition = null;
+  // Track if we're executing queued actions
+  let isExecutingActions = false;
+
+  // Queue a move action instead of executing immediately
+  function queueMoveAction(unit: Unit, targetX: number, targetZ: number): void {
+    if (!turnState) return;
+
+    // Add to pending actions
+    turnState.pendingActions.push({
+      type: "move",
+      targetX,
+      targetZ,
+    });
+
+    // Show shadow at target position
+    createShadowPreview(unit, targetX, targetZ);
+    shadowPosition = { x: targetX, z: targetZ };
+
+    // Consume an action (for UI display)
+    turnState.actionsRemaining--;
+
+    // Clear move highlights
+    clearHighlights();
+    currentActionMode = "none";
+    selectedUnit = null;
+
+    // Update menu to show queued action
+    updateCommandMenu();
+  }
+
+  // Queue an attack action instead of executing immediately
+  function queueAttackAction(_attacker: Unit, defender: Unit): void {
+    if (!turnState) return;
+
+    // Add to pending actions
+    turnState.pendingActions.push({
+      type: "attack",
+      targetUnit: defender,
+    });
+
+    // Consume an action (for UI display)
+    turnState.actionsRemaining--;
+
+    // Clear attack highlights
+    clearHighlights();
+    currentActionMode = "none";
+    selectedUnit = null;
+
+    // Update menu to show queued action
+    updateCommandMenu();
+  }
+
+  // Queue a heal action instead of executing immediately
+  function queueHealAction(_healer: Unit, target: Unit): void {
+    if (!turnState) return;
+
+    // Add to pending actions
+    turnState.pendingActions.push({
+      type: "ability",
+      abilityName: "heal",
+      targetUnit: target,
+    });
+
+    // Consume an action (for UI display)
+    turnState.actionsRemaining--;
+
+    // Clear heal highlights
+    clearHighlights();
+    currentActionMode = "none";
+    selectedUnit = null;
+
+    // Update menu to show queued action
+    updateCommandMenu();
+  }
+
+  // Execute all queued actions sequentially
+  function executeQueuedActions(): void {
+    console.log("executeQueuedActions called, pendingActions:", turnState?.pendingActions.length);
+    if (!turnState || turnState.pendingActions.length === 0) {
+      // No actions to execute, just end turn
+      endCurrentUnitTurn();
       return;
     }
 
-    const metadata = pickResult.pickedMesh.metadata;
-    if (metadata?.type === "tile") {
-      const { gridX, gridZ } = metadata;
-      if (isValidMove(gridX, gridZ)) {
-        // Show shadow at this position
-        createShadowPreview(selectedUnit, gridX, gridZ);
-        shadowPosition = { x: gridX, z: gridZ };
-        // Show attack preview from this position
-        showAttackPreview(selectedUnit, gridX, gridZ);
-      } else {
-        clearShadowPreview();
-        clearAttackPreview();
-        shadowPosition = null;
+    isExecutingActions = true;
+    const unit = turnState.unit;
+    const actions = [...turnState.pendingActions];  // Copy the array
+
+    // Clear previews
+    clearShadowPreview();
+    clearAttackPreview();
+
+    // Process actions sequentially
+    function processNextAction(index: number): void {
+      if (index >= actions.length) {
+        // All actions complete
+        isExecutingActions = false;
+        endCurrentUnitTurn();
+        return;
       }
+
+      const action = actions[index];
+
+      if (action.type === "move" && action.targetX !== undefined && action.targetZ !== undefined) {
+        // Execute move with animation
+        animateMovement(unit, action.targetX, action.targetZ, () => {
+          updateCornerIndicators(unit);
+          processNextAction(index + 1);
+        });
+      } else if (action.type === "attack" && action.targetUnit) {
+        // Execute attack
+        executeAttack(unit, action.targetUnit, () => {
+          processNextAction(index + 1);
+        });
+      } else if (action.type === "ability" && action.abilityName === "heal" && action.targetUnit) {
+        // Execute heal
+        executeHeal(unit, action.targetUnit, () => {
+          processNextAction(index + 1);
+        });
+      } else {
+        // Unknown action, skip
+        processNextAction(index + 1);
+      }
+    }
+
+    // Start processing
+    processNextAction(0);
+  }
+
+  // Execute attack (called during execution phase)
+  function executeAttack(attacker: Unit, defender: Unit, onComplete: () => void): void {
+    // Face the defender
+    setUnitFacing(attacker, defender.gridX, defender.gridZ);
+
+    // Play attack animation based on combat style
+    const isMelee = attacker.customization?.combatStyle === "melee";
+    const attackAnim = isMelee ? "Sword_Slash" : "Gun_Shoot";
+
+    playAnimation(attacker, attackAnim, false, () => {
+      playIdleAnimation(attacker);
+    });
+
+    // Check if defender is concealed
+    if (defender.isConcealed) {
+      defender.isConcealed = false;
+      if (defender.modelMeshes) {
+        defender.modelMeshes.forEach(mesh => {
+          if (mesh.material) {
+            (mesh.material as PBRMaterial).alpha = 1.0;
+          }
+        });
+      }
+      console.log(`${defender.team} ${defender.type}'s Conceal was broken! Damage negated!`);
+      if (attacker.type === "support") playSfx(sfx.hitLight);
+      else if (attacker.type === "tank") playSfx(sfx.hitMedium);
+      else if (attacker.type === "damage") playSfx(sfx.hitHeavy);
+
+      playAnimation(defender, "HitReceive", false, () => {
+        playIdleAnimation(defender);
+        onComplete();
+      });
+      return;
+    }
+
+    // Apply damage
+    defender.hp -= attacker.attack;
+    console.log(`${attacker.team} ${attacker.type} attacks ${defender.team} ${defender.type} for ${attacker.attack} damage! (${defender.hp}/${defender.maxHp} HP)`);
+
+    if (attacker.type === "support") playSfx(sfx.hitLight);
+    else if (attacker.type === "tank") playSfx(sfx.hitMedium);
+    else if (attacker.type === "damage") playSfx(sfx.hitHeavy);
+
+    updateHpBar(defender);
+
+    if (defender.hp <= 0) {
+      console.log(`${defender.team} ${defender.type} was defeated!`);
+      if (defender.isCovering) {
+        defender.isCovering = false;
+        clearCoverVisualization();
+      }
+
+      playAnimation(defender, "Death", false, () => {
+        defender.mesh.dispose();
+        if (defender.hpBar) defender.hpBar.dispose();
+        if (defender.hpBarBg) defender.hpBarBg.dispose();
+        if (defender.modelRoot) defender.modelRoot.dispose();
+        if (defender.animationGroups) defender.animationGroups.forEach(ag => ag.dispose());
+        onComplete();
+      });
+
+      const index = units.indexOf(defender);
+      if (index > -1) units.splice(index, 1);
+      const queueIndex = firstRoundQueue.indexOf(defender);
+      if (queueIndex > -1) firstRoundQueue.splice(queueIndex, 1);
+
+      checkWinCondition();
     } else {
+      playAnimation(defender, "HitReceive", false, () => {
+        playIdleAnimation(defender);
+        onComplete();
+      });
+    }
+  }
+
+  // Execute heal (called during execution phase)
+  function executeHeal(healer: Unit, target: Unit, onComplete: () => void): void {
+    if (healer !== target) {
+      setUnitFacing(healer, target.gridX, target.gridZ);
+    }
+
+    if (healer.modelMeshes) {
+      const weaponMeshes = healer.modelMeshes.filter(m =>
+        m.name.toLowerCase().includes("sword") || m.name.toLowerCase().includes("pistol")
+      );
+      weaponMeshes.forEach(m => m.setEnabled(false));
+
+      playAnimation(healer, "Interact", false, () => {
+        const isMelee = healer.customization?.combatStyle === "melee";
+        healer.modelMeshes?.forEach(m => {
+          if (m.name.toLowerCase().includes("sword")) m.setEnabled(isMelee);
+          else if (m.name.toLowerCase().includes("pistol")) m.setEnabled(!isMelee);
+        });
+        playIdleAnimation(healer);
+        onComplete();
+      });
+    } else {
+      onComplete();
+    }
+
+    const healedAmount = Math.min(healer.healAmount, target.maxHp - target.hp);
+    target.hp += healedAmount;
+    console.log(`${healer.team} ${healer.type} heals ${target.team} ${target.type} for ${healedAmount} HP! (${target.hp}/${target.maxHp} HP)`);
+
+    playSfx(sfx.heal);
+    updateHpBar(target);
+  }
+
+  // Undo the last queued action
+  function undoLastAction(): void {
+    if (!turnState || turnState.pendingActions.length === 0) return;
+
+    const lastAction = turnState.pendingActions.pop();
+    turnState.actionsRemaining++;
+
+    // If it was a move, clear the shadow preview
+    if (lastAction?.type === "move") {
       clearShadowPreview();
-      clearAttackPreview();
       shadowPosition = null;
     }
-  });
+
+    updateCommandMenu();
+  }
 
   // Click handling
   scene.onPointerObservable.add((pointerInfo) => {
     if (gameOver) return;
-    if (isAnimatingMovement) return;  // Block input during movement animation
+    if (isAnimatingMovement || isExecutingActions) return;  // Block input during animations
     if (pointerInfo.type !== PointerEventTypes.POINTERPICK) return;
 
     // Check action mode for menu-driven actions
@@ -1589,41 +1726,11 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
     if (metadata?.type === "tile") {
       const { gridX, gridZ } = metadata;
 
-      if (selectedUnit) {
+      if (selectedUnit && currentActionMode === "move") {
         if (isValidMove(gridX, gridZ)) {
-          const movingUnit = selectedUnit;
-          clearHighlights();
-          clearShadowPreview();
-          clearAttackPreview();
-          shadowPosition = null;
-          currentActionMode = "none";
-
-          // Animate movement
-          animateMovement(movingUnit, gridX, gridZ, () => {
-            updateCornerIndicators(movingUnit);
-            consumeAction();
-
-            // After moving, check if can still act (if actions remain)
-            if (hasActionsRemaining()) {
-              // Re-highlight to show attack/heal options from new position
-              selectedUnit = movingUnit;
-              highlightValidActions(movingUnit);
-
-              // If no valid actions, deselect
-              const canAttack = getAttackableEnemies(movingUnit).length > 0;
-              const canHeal = getHealableAllies(movingUnit).length > 0;
-              const canMove = getValidMoveTiles(movingUnit).length > 0;
-              if (!canAttack && !canHeal && !canMove) {
-                clearHighlights();
-                selectedUnit = null;
-              }
-            } else {
-              selectedUnit = null;
-            }
-          });
-
-          // Clear selection during animation
-          selectedUnit = null;
+          // Queue the move instead of executing immediately
+          console.log(`Queueing move to (${gridX}, ${gridZ})`);
+          queueMoveAction(selectedUnit, gridX, gridZ);
         } else {
           clearHighlights();
           clearShadowPreview();
@@ -1636,23 +1743,22 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
     } else if (metadata?.type === "unit") {
       const clickedUnit = units.find(u =>
         u.mesh === pickedMesh ||
-        u.baseMesh === pickedMesh ||
         u.modelMeshes?.includes(pickedMesh as AbstractMesh)
       );
       if (!clickedUnit) return;
 
       if (selectedUnit) {
         // Check if clicking an attackable enemy
-        if (attackableUnits.includes(clickedUnit)) {
-          attackUnit(selectedUnit, clickedUnit);
-          clearHighlights();
-          selectedUnit = null;
+        console.log(`Click on unit: mode=${currentActionMode}, attackableUnits=${attackableUnits.length}, includes=${attackableUnits.includes(clickedUnit)}`);
+        if (attackableUnits.includes(clickedUnit) && currentActionMode === "attack") {
+          console.log("Queueing attack action");
+          queueAttackAction(selectedUnit, clickedUnit);
           return;
         }
 
         // Check if clicking a healable ally
-        if (healableUnits.includes(clickedUnit)) {
-          healUnit(selectedUnit, clickedUnit);
+        if (healableUnits.includes(clickedUnit) && currentActionMode === "ability") {
+          queueHealAction(selectedUnit, clickedUnit);
           clearHighlights();
           selectedUnit = null;
           currentActionMode = "none";
@@ -1810,11 +1916,13 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
   attackBtn.fontSize = 14;
   attackBtn.paddingBottom = "3px";
   attackBtn.onPointerClickObservable.add(() => {
+    console.log(`Attack button clicked: currentUnit=${currentUnit?.type}, isAnimating=${isAnimatingMovement}, actionsRemaining=${turnState?.actionsRemaining}`);
     if (currentUnit && !isAnimatingMovement) {
       currentActionMode = "attack";
       selectedUnit = currentUnit;
       // Highlight attack targets with LOS consideration
       highlightAttackTargets(currentUnit);
+      console.log(`Attack mode set, attackableUnits found: ${attackableUnits.length}`);
     }
   });
   actionButtonsStack.addControl(attackBtn);
@@ -1889,11 +1997,7 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
   undoBtn.cornerRadius = 5;
   undoBtn.fontSize = 12;
   undoBtn.onPointerClickObservable.add(() => {
-    // TODO: Implement undo
-    if (turnState && turnState.pendingActions.length > 0) {
-      turnState.pendingActions.pop();
-      updateMenuPreview();
-    }
+    undoLastAction();
   });
   bottomButtonsGrid.addControl(undoBtn, 0, 0);
 
@@ -1905,9 +2009,8 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
   executeBtn.cornerRadius = 5;
   executeBtn.fontSize = 12;
   executeBtn.onPointerClickObservable.add(() => {
-    // TODO: Execute all pending actions
-    if (currentUnit) {
-      endTurn();
+    if (currentUnit && !isExecutingActions) {
+      executeQueuedActions();
     }
   });
   bottomButtonsGrid.addControl(executeBtn, 0, 1);
@@ -1920,6 +2023,17 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
     }
 
     commandMenu.isVisible = true;
+
+    // Position menu based on team (P1 = left, P2 = right)
+    if (currentUnit.team === "player") {
+      commandMenu.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_LEFT;
+      commandMenu.left = "20px";
+    } else {
+      commandMenu.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_RIGHT;
+      commandMenu.left = "-20px";  // Negative moves it left from right edge
+    }
+    // Force layout update
+    commandMenu.markAsDirty();
 
     // Update team color border
     const r = Math.round(currentUnit.teamColor.r * 255).toString(16).padStart(2, '0');
@@ -1954,12 +2068,28 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
   }
 
   function updateMenuPreview(): void {
-    if (!currentUnit) {
+    if (!currentUnit || !turnState) {
       previewText.text = "";
       return;
     }
 
     const lines: string[] = [];
+
+    // Show queued actions
+    if (turnState.pendingActions.length > 0) {
+      lines.push("Queued:");
+      for (const action of turnState.pendingActions) {
+        if (action.type === "move") {
+          lines.push(`  Move to (${action.targetX},${action.targetZ})`);
+        } else if (action.type === "attack" && action.targetUnit) {
+          const targetName = action.targetUnit.type.charAt(0).toUpperCase() + action.targetUnit.type.slice(1);
+          lines.push(`  Attack ${targetName}`);
+        } else if (action.type === "ability" && action.abilityName === "heal" && action.targetUnit) {
+          const targetName = action.targetUnit === currentUnit ? "self" : action.targetUnit.type;
+          lines.push(`  Heal ${targetName}`);
+        }
+      }
+    }
 
     // Show unit status effects
     if (currentUnit.isConcealed) {
@@ -1969,23 +2099,12 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
       lines.push("* COVERING");
     }
 
-    // Show available options based on remaining actions
-    const remaining = turnState?.actionsRemaining ?? 0;
-    if (remaining > 0) {
-      const canMove = getValidMoveTiles(currentUnit).length > 0;
-      const canAttack = getAttackableEnemies(currentUnit).length > 0;
-      const canHeal = currentUnit.type === "support" && getHealableAllies(currentUnit).length > 0;
-
-      if (canMove || canAttack || canHeal) {
-        lines.push(`Options:`);
-        if (canMove) lines.push("  - Move available");
-        if (canAttack) lines.push("  - Attack available");
-        if (canHeal) lines.push("  - Heal available");
-      } else {
-        lines.push("No targets in range");
-      }
-    } else {
-      lines.push("Turn complete");
+    // Show action status
+    const remaining = turnState.actionsRemaining;
+    if (remaining > 0 && turnState.pendingActions.length < 2) {
+      lines.push(`${remaining} action(s) left`);
+    } else if (turnState.pendingActions.length > 0) {
+      lines.push("Press Execute!");
     }
 
     previewText.text = lines.join("\n");
@@ -2041,23 +2160,6 @@ async function createUnit(
     skinTone: 4,
   };
 
-  // Team indicator base
-  const baseMesh = MeshBuilder.CreateCylinder(
-    `${team}_${type}_base_${gridX}_${gridZ}`,
-    { diameter: 0.8, height: 0.08, tessellation: 24 },
-    scene
-  );
-  const baseMat = new StandardMaterial(`${team}BaseMat_${gridX}_${gridZ}`, scene);
-  baseMat.diffuseColor = teamColor;
-  baseMat.emissiveColor = teamColor.scale(0.5);
-  baseMesh.material = baseMat;
-  baseMesh.position = new Vector3(
-    gridX * TILE_SIZE - gridOffset,
-    0.1,
-    gridZ * TILE_SIZE - gridOffset
-  );
-  baseMesh.metadata = { type: "unit", unitType: type, team };
-
   // Load 3D model
   const isMale = c.body === "male";
   const modelFile = getModelFileName(type, isMale);
@@ -2071,7 +2173,7 @@ async function createUnit(
   const modelScale = 0.5;
   modelRoot.position = new Vector3(
     gridX * TILE_SIZE - gridOffset,
-    0.14,
+    0.05,  // Lowered since base disc was removed
     gridZ * TILE_SIZE - gridOffset
   );
   modelRoot.scaling = new Vector3(
@@ -2158,7 +2260,6 @@ async function createUnit(
 
   return {
     mesh: hpBarAnchor,  // Use anchor as the main "mesh" for positioning
-    baseMesh,
     type,
     team,
     gridX,
@@ -2199,11 +2300,8 @@ function moveUnit(unit: Unit, newX: number, newZ: number, gridOffset: number): v
   // Move HP bar anchor
   unit.mesh.position = new Vector3(newPosX, 1.2, newPosZ);
 
-  // Move base
-  unit.baseMesh.position = new Vector3(newPosX, 0.1, newPosZ);
-
   // Move 3D model
   if (unit.modelRoot) {
-    unit.modelRoot.position = new Vector3(newPosX, 0.14, newPosZ);
+    unit.modelRoot.position = new Vector3(newPosX, 0.05, newPosZ);
   }
 }

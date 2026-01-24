@@ -635,11 +635,12 @@ export function createLoadoutScene(
       });
     };
 
-    // Row 2: Selection display + Clear button
+    // Row 2: Selection display + Clear button + Randomize button
     const selectionRow = new Grid();
     selectionRow.width = "100%";
     selectionRow.addColumnDefinition(1);        // Selection text - fill
-    selectionRow.addColumnDefinition(70, true); // Clear button - fixed width
+    selectionRow.addColumnDefinition(55, true); // Clear button - fixed width
+    selectionRow.addColumnDefinition(70, true); // Randomize button - fixed width
     selectionRow.addRowDefinition(1);
     container.addControl(selectionRow, 2, 0);
 
@@ -666,6 +667,44 @@ export function createLoadoutScene(
       selectedClass = null;
     });
     selectionRow.addControl(clearBtn, 0, 1);
+
+    // Randomize button - generates 3 random units
+    const randomizeBtn = Button.CreateSimpleButton(`${playerName}_random`, "Random");
+    randomizeBtn.width = "100%";
+    randomizeBtn.height = "22px";
+    randomizeBtn.color = "#66aaff";
+    randomizeBtn.background = "#224466";
+    randomizeBtn.cornerRadius = 3;
+    randomizeBtn.fontSize = 11;
+    randomizeBtn.onPointerClickObservable.add(() => {
+      // Clear existing selections
+      selectionArray.length = 0;
+
+      // Generate 3 random units
+      const unitTypes: UnitType[] = ["tank", "damage", "support"];
+      for (let i = 0; i < 3; i++) {
+        const randomType = unitTypes[Math.floor(Math.random() * unitTypes.length)];
+        const randomCustomization: SupportCustomization = {
+          body: Math.random() > 0.5 ? "male" : "female",
+          combatStyle: Math.random() > 0.5 ? "ranged" : "melee",
+          handedness: Math.random() > 0.5 ? "right" : "left",
+          head: Math.floor(Math.random() * 4),
+          hairColor: Math.floor(Math.random() * HAIR_COLORS.length),
+          eyeColor: Math.floor(Math.random() * EYE_COLORS.length),
+          skinTone: Math.floor(Math.random() * SKIN_TONES.length),
+        };
+        selectionArray.push({
+          type: randomType,
+          customization: randomCustomization,
+        });
+      }
+
+      updateSelectionDisplay();
+      updateStartButton();
+      customPanel.isVisible = false;
+      selectedClass = null;
+    });
+    selectionRow.addControl(randomizeBtn, 0, 2);
 
     const updateSelectionDisplay = (): void => {
       if (selectionArray.length === 0) {
