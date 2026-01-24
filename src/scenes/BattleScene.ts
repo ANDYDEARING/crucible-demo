@@ -585,7 +585,7 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
   const intentIndicators: Mesh[] = [];
 
   // Create a single intent indicator at target position
-  function createIntentIndicator(targetX: number, targetZ: number, color: Color3): Mesh {
+  function createIntentIndicator(targetX: number, targetZ: number, color: Color3, stackIndex: number = 0): Mesh {
     const indicator = MeshBuilder.CreateCylinder(
       "intent_indicator",
       { diameter: 0.9, height: 0.06, tessellation: 24 },
@@ -598,9 +598,10 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
     indicator.material = indicatorMat;
     indicator.position = new Vector3(
       targetX * TILE_SIZE - gridOffset,
-      0.12,  // Slightly above tile
+      0.12 + (stackIndex * 0.08),  // Stack vertically for multiple indicators
       targetZ * TILE_SIZE - gridOffset
     );
+    indicator.isPickable = false;  // Don't block clicks
     return indicator;
   }
 
@@ -618,29 +619,45 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
 
     if (!turnState) return;
 
+    // Track how many indicators are at each position for stacking
+    const positionCounts: Map<string, number> = new Map();
+
+    function getStackIndex(x: number, z: number): number {
+      const key = `${x},${z}`;
+      const count = positionCounts.get(key) || 0;
+      positionCounts.set(key, count + 1);
+      return count;
+    }
+
     for (const action of turnState.pendingActions) {
       if (action.type === "attack" && action.targetUnit) {
         // Red indicator for attack
+        const stackIndex = getStackIndex(action.targetUnit.gridX, action.targetUnit.gridZ);
         const indicator = createIntentIndicator(
           action.targetUnit.gridX,
           action.targetUnit.gridZ,
-          new Color3(0.9, 0.2, 0.2)  // Red
+          new Color3(0.9, 0.2, 0.2),  // Red
+          stackIndex
         );
         intentIndicators.push(indicator);
       } else if (action.type === "ability" && action.abilityName === "heal" && action.targetUnit) {
         // Green indicator for heal/support
+        const stackIndex = getStackIndex(action.targetUnit.gridX, action.targetUnit.gridZ);
         const indicator = createIntentIndicator(
           action.targetUnit.gridX,
           action.targetUnit.gridZ,
-          new Color3(0.2, 0.9, 0.3)  // Green
+          new Color3(0.2, 0.9, 0.3),  // Green
+          stackIndex
         );
         intentIndicators.push(indicator);
       } else if (action.type === "ability" && (action.abilityName === "conceal" || action.abilityName === "cover") && action.targetUnit) {
         // Blue indicator for self-buff abilities
+        const stackIndex = getStackIndex(action.targetUnit.gridX, action.targetUnit.gridZ);
         const indicator = createIntentIndicator(
           action.targetUnit.gridX,
           action.targetUnit.gridZ,
-          new Color3(0.2, 0.5, 0.9)  // Blue
+          new Color3(0.2, 0.5, 0.9),  // Blue
+          stackIndex
         );
         intentIndicators.push(indicator);
       }
@@ -1020,39 +1037,92 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
     if (!hasActionsRemaining()) return []; // No actions remaining
     const startX = fromX ?? unit.gridX;
     const startZ = fromZ ?? unit.gridZ;
-    const valid: { x: number; z: number }[] = [];
-    for (let x = 0; x < GRID_SIZE; x++) {
-      for (let z = 0; z < GRID_SIZE; z++) {
-        const distance = Math.abs(x - startX) + Math.abs(z - startZ);
-        if (distance > 0 && distance <= unit.moveRange) {
-          // Check if occupied (but exclude the unit's original position since they're moving from there)
-          const occupied = units.some(u => u.gridX === x && u.gridZ === z && !(u === unit && fromX !== undefined));
-          if (!occupied) {
-            valid.push({ x, z });
-          }
+
+    // BFS pathfinding - find all tiles reachable within move range
+    // Cannot pass through enemy units, but can pass through friendly units
+    const visited = new Set<string>();
+    const reachable: { x: number; z: number }[] = [];
+
+    // Queue: [x, z, distance]
+    const queue: [number, number, number][] = [[startX, startZ, 0]];
+    visited.add(`${startX},${startZ}`);
+
+    while (queue.length > 0) {
+      const [cx, cz, dist] = queue.shift()!;
+
+      // If within move range and not the starting tile, it's a valid destination
+      if (dist > 0 && dist <= unit.moveRange) {
+        // Check if target tile is unoccupied (can't end on another unit)
+        const occupied = units.some(u => u.gridX === cx && u.gridZ === cz);
+        if (!occupied) {
+          reachable.push({ x: cx, z: cz });
         }
       }
+
+      // Stop expanding if at max range
+      if (dist >= unit.moveRange) continue;
+
+      // Check all 4 cardinal directions
+      const directions = [[0, 1], [0, -1], [1, 0], [-1, 0]];
+      for (const [dx, dz] of directions) {
+        const nx = cx + dx;
+        const nz = cz + dz;
+        const key = `${nx},${nz}`;
+
+        // Skip if out of bounds or already visited
+        if (nx < 0 || nx >= GRID_SIZE || nz < 0 || nz >= GRID_SIZE) continue;
+        if (visited.has(key)) continue;
+
+        // Check if tile is blocked by enemy unit (can't pass through)
+        const enemyBlocking = units.some(u => u.gridX === nx && u.gridZ === nz && u.team !== unit.team);
+        if (enemyBlocking) {
+          visited.add(key); // Mark as visited so we don't check again
+          continue;
+        }
+
+        visited.add(key);
+        queue.push([nx, nz, dist + 1]);
+      }
     }
-    return valid;
+
+    return reachable;
   }
 
-  function getAttackableEnemies(unit: Unit): Unit[] {
+  function getAttackableEnemies(unit: Unit, fromX?: number, fromZ?: number): Unit[] {
     if (!hasActionsRemaining()) return []; // No actions remaining
+    // Use shadow position if pending move, otherwise use provided or current position
+    const effectiveX = fromX ?? shadowPosition?.x ?? unit.gridX;
+    const effectiveZ = fromZ ?? shadowPosition?.z ?? unit.gridZ;
     return units.filter(u => {
       if (u.team === unit.team) return false;
-      const distance = Math.abs(u.gridX - unit.gridX) + Math.abs(u.gridZ - unit.gridZ);
+      const distance = Math.abs(u.gridX - effectiveX) + Math.abs(u.gridZ - effectiveZ);
       return distance <= unit.attackRange;
     });
   }
 
-  function getHealableAllies(unit: Unit): Unit[] {
+  function getHealableAllies(unit: Unit, fromX?: number, fromZ?: number): Unit[] {
     // Only support can heal, needs actions remaining
     // Heal is adjacent only (distance <= 1, including self)
     if (unit.healAmount <= 0 || !hasActionsRemaining()) return [];
+
+    // Use shadow position if pending move, otherwise use provided or current position
+    const hasPendingMove = shadowPosition !== null;
+    const effectiveX = fromX ?? shadowPosition?.x ?? unit.gridX;
+    const effectiveZ = fromZ ?? shadowPosition?.z ?? unit.gridZ;
+
     return units.filter(u => {
       if (u.team !== unit.team) return false; // Must be same team
       if (u.hp >= u.maxHp) return false; // Already at full health
-      const distance = Math.abs(u.gridX - unit.gridX) + Math.abs(u.gridZ - unit.gridZ);
+
+      // For the healer themselves with a pending move:
+      // They can self-heal but only by clicking the shadow position (distance 0 from effective)
+      // Their original gridX/Z is no longer valid for targeting
+      if (u === unit && hasPendingMove) {
+        // Healer is at effectiveX/Z (shadow), so distance is 0 - allowed
+        return true;
+      }
+
+      const distance = Math.abs(u.gridX - effectiveX) + Math.abs(u.gridZ - effectiveZ);
       return distance <= 1; // Self (0) or adjacent (1) only
     });
   }
@@ -1077,16 +1147,16 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
     currentTile.material = selectedMaterial;
     highlightedTiles.push(currentTile);
 
-    // Highlight attackable enemies (if hasn't attacked)
-    attackableUnits = getAttackableEnemies(unit);
+    // Highlight attackable enemies (from effective position)
+    attackableUnits = getAttackableEnemies(unit, effectiveX, effectiveZ);
     for (const player2 of attackableUnits) {
       const tile = tiles[player2.gridX][player2.gridZ];
       tile.material = attackableMaterial;
       highlightedTiles.push(tile);
     }
 
-    // Highlight healable allies (support only, if hasn't attacked)
-    healableUnits = getHealableAllies(unit);
+    // Highlight healable allies (support only, from effective position)
+    healableUnits = getHealableAllies(unit, effectiveX, effectiveZ);
     for (const ally of healableUnits) {
       const tile = tiles[ally.gridX][ally.gridZ];
       tile.material = healableMaterial;
@@ -1162,6 +1232,7 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
     if (!hasActionsRemaining() || unit.healAmount <= 0) return;
 
     // Use shadow position if pending move, otherwise current position
+    const hasPendingMove = shadowPosition !== null;
     const effectiveX = fromX ?? shadowPosition?.x ?? unit.gridX;
     const effectiveZ = fromZ ?? shadowPosition?.z ?? unit.gridZ;
 
@@ -1169,6 +1240,17 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
     for (const ally of units) {
       if (ally.team !== unit.team) continue;
       if (ally.hp >= ally.maxHp) continue;  // Already at full health
+
+      // For the healer themselves with a pending move:
+      // They can self-heal by clicking the shadow position, not their original position
+      if (ally === unit && hasPendingMove) {
+        // Highlight the shadow position for self-heal (effective position)
+        const tile = tiles[effectiveX][effectiveZ];
+        tile.material = healableMaterial;
+        highlightedTiles.push(tile);
+        healableUnits.push(ally);
+        continue;
+      }
 
       const distance = Math.abs(ally.gridX - effectiveX) + Math.abs(ally.gridZ - effectiveZ);
       if (distance <= 1) {  // Self (0) or adjacent (1)
@@ -1179,7 +1261,7 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
       }
     }
 
-    // Highlight effective position
+    // Highlight effective position if not already highlighted
     const currentTile = tiles[effectiveX][effectiveZ];
     if (!highlightedTiles.includes(currentTile)) {
       currentTile.material = selectedMaterial;
@@ -1693,6 +1775,11 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
           processNextAction(index + 1);
         });
       } else if (action.type === "attack" && action.targetUnit) {
+        // Check if target is still alive (may have been killed by previous action)
+        if (action.targetUnit.hp <= 0) {
+          processNextAction(index + 1);
+          return;
+        }
         // Execute attack
         executeAttack(unit, action.targetUnit, () => {
           processNextAction(index + 1);
@@ -1997,7 +2084,12 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
         }
       } else if (selectedUnit && currentActionMode === "ability") {
         // Check if there's a healable unit on this tile
-        const targetUnit = healableUnits.find(u => u.gridX === gridX && u.gridZ === gridZ);
+        // Special case: self-heal with pending move - healer clicks shadow position
+        let targetUnit = healableUnits.find(u => u.gridX === gridX && u.gridZ === gridZ);
+        if (!targetUnit && shadowPosition && gridX === shadowPosition.x && gridZ === shadowPosition.z) {
+          // Clicked on shadow position - check if healer is in healableUnits (self-heal)
+          targetUnit = healableUnits.find(u => u === selectedUnit);
+        }
         if (targetUnit) {
           queueHealAction(selectedUnit, targetUnit);
           clearHighlights();
@@ -2025,6 +2117,10 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
 
         // Check if clicking a healable ally
         if (healableUnits.includes(clickedUnit) && currentActionMode === "ability") {
+          // If clicking self with a pending move, don't allow - must click shadow position instead
+          if (clickedUnit === selectedUnit && shadowPosition) {
+            return; // Ignore click on original position, player should click shadow
+          }
           queueHealAction(selectedUnit, clickedUnit);
           clearHighlights();
           selectedUnit = null;
