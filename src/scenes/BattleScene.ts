@@ -16,7 +16,7 @@ import {
   PBRMaterial,
 } from "@babylonjs/core";
 import "@babylonjs/loaders/glTF";
-import { AdvancedDynamicTexture, TextBlock, Button, Rectangle } from "@babylonjs/gui";
+import { AdvancedDynamicTexture, TextBlock, Button, Rectangle, StackPanel, Grid, Control } from "@babylonjs/gui";
 import type { Loadout, UnitType, UnitSelection, SupportCustomization } from "../types";
 
 // Color palettes (same as LoadoutScene)
@@ -52,6 +52,25 @@ const UNIT_STATS = {
 };
 
 type Team = "player" | "enemy";
+type ActionMode = "none" | "move" | "attack" | "ability";
+
+// Pending action for preview system
+interface PendingAction {
+  type: "move" | "attack" | "ability";
+  targetX?: number;
+  targetZ?: number;
+  targetUnit?: Unit;
+  abilityName?: string;
+}
+
+// Turn state for preview/undo system
+interface TurnState {
+  unit: Unit;
+  actionsRemaining: number;
+  pendingActions: PendingAction[];
+  originalPosition: { x: number; z: number };
+  originalFacing: number;
+}
 
 interface Unit {
   mesh: Mesh;
@@ -68,9 +87,10 @@ interface Unit {
   healAmount: number;
   hpBar?: Rectangle;
   hpBarBg?: Rectangle;
+  originalColor: Color3;
+  // Action tracking (legacy - will migrate to TurnState)
   hasMoved: boolean;
   hasAttacked: boolean;
-  originalColor: Color3;
   // Initiative system
   speed: number;
   speedBonus: number;  // Bonus from skipping, consumed after next turn
@@ -82,6 +102,11 @@ interface Unit {
   animationGroups?: AnimationGroup[];
   customization?: SupportCustomization;
   teamColor: Color3;
+  // Facing (radians, 0 = +Z direction)
+  facing: number;
+  // Ability states
+  isConcealed: boolean;
+  isCovering: boolean;
 }
 
 export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, loadout: Loadout | null): Scene {
@@ -191,6 +216,327 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
   // Units
   const units: Unit[] = [];
 
+  // Current turn state for preview/undo system
+  let turnState: TurnState | null = null;
+  let currentActionMode: ActionMode = "none";
+
+  // Callback for when a unit's turn starts (set later by command menu)
+  let onTurnStartCallback: ((unit: Unit) => void) | null = null;
+
+  // ============================================
+  // ANIMATION HELPERS
+  // ============================================
+
+  function playAnimation(unit: Unit, animName: string, loop: boolean, onComplete?: () => void): void {
+    if (!unit.animationGroups) return;
+
+    // Stop all current animations
+    unit.animationGroups.forEach(ag => ag.stop());
+
+    // Find and play the requested animation
+    const anim = unit.animationGroups.find(ag => ag.name === animName);
+    if (anim) {
+      anim.start(loop);
+      if (onComplete && !loop) {
+        anim.onAnimationEndObservable.addOnce(() => {
+          onComplete();
+        });
+      }
+    }
+  }
+
+  function playIdleAnimation(unit: Unit): void {
+    const isMelee = unit.customization?.combatStyle === "melee";
+    playAnimation(unit, isMelee ? "Idle_Sword" : "Idle_Gun", true);
+  }
+
+  // ============================================
+  // FACING SYSTEM
+  // ============================================
+
+  function setUnitFacing(unit: Unit, targetX: number, targetZ: number): void {
+    const dx = targetX - unit.gridX;
+    const dz = targetZ - unit.gridZ;
+
+    if (dx === 0 && dz === 0) return;
+
+    // Calculate angle (0 = +Z direction, clockwise)
+    unit.facing = Math.atan2(dx, dz);
+
+    // Apply to model
+    if (unit.modelRoot) {
+      unit.modelRoot.rotation.y = unit.facing;
+    }
+  }
+
+  function faceAverageEnemyPosition(unit: Unit): void {
+    const enemies = units.filter(u => u.team !== unit.team);
+    if (enemies.length === 0) return;
+
+    const avgX = enemies.reduce((sum, e) => sum + e.gridX, 0) / enemies.length;
+    const avgZ = enemies.reduce((sum, e) => sum + e.gridZ, 0) / enemies.length;
+
+    setUnitFacing(unit, avgX, avgZ);
+  }
+
+  // ============================================
+  // LINE OF SIGHT SYSTEM
+  // ============================================
+
+  function hasLineOfSight(fromX: number, fromZ: number, toX: number, toZ: number): boolean {
+    // Bresenham's line algorithm to check tiles between from and to
+    // Returns false if any occupied tile (other than start/end) blocks the line
+
+    const dx = Math.abs(toX - fromX);
+    const dz = Math.abs(toZ - fromZ);
+    const sx = fromX < toX ? 1 : -1;
+    const sz = fromZ < toZ ? 1 : -1;
+    let err = dx - dz;
+
+    let x = fromX;
+    let z = fromZ;
+
+    while (x !== toX || z !== toZ) {
+      const e2 = 2 * err;
+
+      if (e2 > -dz) {
+        err -= dz;
+        x += sx;
+      }
+      if (e2 < dx) {
+        err += dx;
+        z += sz;
+      }
+
+      // Skip checking the destination tile
+      if (x === toX && z === toZ) break;
+
+      // Check if this tile is occupied (blocking LOS)
+      const occupant = units.find(u => u.gridX === x && u.gridZ === z && u.hp > 0);
+      if (occupant) {
+        return false;
+      }
+    }
+
+    return true;
+  }
+
+  function getTilesInLOS(fromX: number, fromZ: number, excludeAdjacent: boolean): { x: number; z: number }[] {
+    const result: { x: number; z: number }[] = [];
+
+    for (let x = 0; x < GRID_SIZE; x++) {
+      for (let z = 0; z < GRID_SIZE; z++) {
+        if (x === fromX && z === fromZ) continue;
+
+        const distance = Math.abs(x - fromX) + Math.abs(z - fromZ);
+
+        // If excluding adjacent (for guns), skip distance 1
+        if (excludeAdjacent && distance === 1) continue;
+
+        if (hasLineOfSight(fromX, fromZ, x, z)) {
+          result.push({ x, z });
+        }
+      }
+    }
+
+    return result;
+  }
+
+  // ============================================
+  // WEAPON RANGE HELPERS
+  // ============================================
+
+  function getAdjacentOrdinalTiles(x: number, z: number): { x: number; z: number }[] {
+    // Only N, S, E, W - not diagonals
+    const adjacent: { x: number; z: number }[] = [];
+    const directions = [
+      { dx: 0, dz: 1 },   // North
+      { dx: 0, dz: -1 },  // South
+      { dx: 1, dz: 0 },   // East
+      { dx: -1, dz: 0 },  // West
+    ];
+
+    for (const dir of directions) {
+      const nx = x + dir.dx;
+      const nz = z + dir.dz;
+      if (nx >= 0 && nx < GRID_SIZE && nz >= 0 && nz < GRID_SIZE) {
+        adjacent.push({ x: nx, z: nz });
+      }
+    }
+
+    return adjacent;
+  }
+
+  function getValidAttackTiles(unit: Unit, fromX?: number, fromZ?: number): { x: number; z: number; hasLOS: boolean }[] {
+    const x = fromX ?? unit.gridX;
+    const z = fromZ ?? unit.gridZ;
+    const isMelee = unit.customization?.combatStyle === "melee";
+
+    if (isMelee) {
+      // Sword: adjacent ordinal only
+      return getAdjacentOrdinalTiles(x, z).map(tile => ({
+        ...tile,
+        hasLOS: true  // Always has LOS for adjacent
+      }));
+    } else {
+      // Gun: LOS but not adjacent
+      const losResult: { x: number; z: number; hasLOS: boolean }[] = [];
+
+      for (let tx = 0; tx < GRID_SIZE; tx++) {
+        for (let tz = 0; tz < GRID_SIZE; tz++) {
+          if (tx === x && tz === z) continue;
+
+          const distance = Math.abs(tx - x) + Math.abs(tz - z);
+          if (distance === 1) continue;  // Skip adjacent
+
+          const hasLOS = hasLineOfSight(x, z, tx, tz);
+          losResult.push({ x: tx, z: tz, hasLOS });
+        }
+      }
+
+      return losResult;
+    }
+  }
+
+  // LOS-blocked material (gray for blocked targets)
+  const blockedMaterial = new StandardMaterial("blockedMat", scene);
+  blockedMaterial.diffuseColor = new Color3(0.4, 0.4, 0.4);
+
+  // Export references for future use (prevents unused warnings)
+  const _helpers = { getTilesInLOS, getValidAttackTiles, createShadowPreview, clearShadowPreview, shadowPosition: () => shadowPosition, highlightAttackTargets, getAttackableEnemiesWithLOS, showAttackPreview, clearAttackPreview, highlightHealTargets, toggleConceal, toggleCover, clearCoverVisualization };
+  void _helpers;
+
+  // ============================================
+  // ANIMATED MOVEMENT
+  // ============================================
+
+  let isAnimatingMovement = false;
+
+  function animateMovement(unit: Unit, targetX: number, targetZ: number, onComplete?: () => void): void {
+    if (!unit.modelRoot) {
+      // Fallback to instant movement if no model
+      moveUnit(unit, targetX, targetZ, gridOffset);
+      onComplete?.();
+      return;
+    }
+
+    isAnimatingMovement = true;
+
+    // First, face the target
+    setUnitFacing(unit, targetX, targetZ);
+
+    // Calculate world positions
+    const startX = unit.gridX * TILE_SIZE - gridOffset;
+    const startZ = unit.gridZ * TILE_SIZE - gridOffset;
+    const endX = targetX * TILE_SIZE - gridOffset;
+    const endZ = targetZ * TILE_SIZE - gridOffset;
+
+    // Update grid position immediately (for game logic)
+    unit.gridX = targetX;
+    unit.gridZ = targetZ;
+
+    // Play run animation
+    playAnimation(unit, "Run", true);
+
+    // Animate over time
+    const duration = 0.4;  // seconds
+    let elapsed = 0;
+
+    const moveObserver = scene.onBeforeRenderObservable.add(() => {
+      elapsed += engine.getDeltaTime() / 1000;
+      const t = Math.min(elapsed / duration, 1);
+
+      // Smooth interpolation
+      const easeT = t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2;
+
+      const currentX = startX + (endX - startX) * easeT;
+      const currentZ = startZ + (endZ - startZ) * easeT;
+
+      // Update all mesh positions
+      unit.modelRoot!.position.x = currentX;
+      unit.modelRoot!.position.z = currentZ;
+      unit.baseMesh.position.x = currentX;
+      unit.baseMesh.position.z = currentZ;
+      unit.mesh.position.x = currentX;
+      unit.mesh.position.z = currentZ;
+
+      if (t >= 1) {
+        // Animation complete
+        scene.onBeforeRenderObservable.remove(moveObserver);
+        isAnimatingMovement = false;
+
+        // Snap to final position
+        const finalX = endX;
+        const finalZ = endZ;
+        unit.modelRoot!.position.x = finalX;
+        unit.modelRoot!.position.z = finalZ;
+        unit.baseMesh.position.x = finalX;
+        unit.baseMesh.position.z = finalZ;
+        unit.mesh.position.x = finalX;
+        unit.mesh.position.z = finalZ;
+
+        // Return to idle
+        playIdleAnimation(unit);
+
+        onComplete?.();
+      }
+    });
+  }
+
+  // ============================================
+  // SHADOW PREVIEW SYSTEM
+  // ============================================
+
+  let shadowMesh: Mesh | null = null;
+  let shadowBaseMesh: Mesh | null = null;
+
+  function createShadowPreview(unit: Unit, targetX: number, targetZ: number): void {
+    clearShadowPreview();
+
+    // Create semi-transparent base indicator
+    shadowBaseMesh = MeshBuilder.CreateCylinder(
+      "shadow_base",
+      { diameter: 0.8, height: 0.08, tessellation: 24 },
+      scene
+    );
+    const shadowBaseMat = new StandardMaterial("shadowBaseMat", scene);
+    shadowBaseMat.diffuseColor = unit.teamColor;
+    shadowBaseMat.alpha = 0.4;
+    shadowBaseMesh.material = shadowBaseMat;
+    shadowBaseMesh.position = new Vector3(
+      targetX * TILE_SIZE - gridOffset,
+      0.1,
+      targetZ * TILE_SIZE - gridOffset
+    );
+
+    // Create shadow silhouette (simple cylinder for now)
+    shadowMesh = MeshBuilder.CreateCylinder(
+      "shadow_unit",
+      { diameter: 0.5, height: 1.0, tessellation: 12 },
+      scene
+    );
+    const shadowMat = new StandardMaterial("shadowMat", scene);
+    shadowMat.diffuseColor = unit.teamColor;
+    shadowMat.alpha = 0.3;
+    shadowMesh.material = shadowMat;
+    shadowMesh.position = new Vector3(
+      targetX * TILE_SIZE - gridOffset,
+      0.6,
+      targetZ * TILE_SIZE - gridOffset
+    );
+  }
+
+  function clearShadowPreview(): void {
+    if (shadowMesh) {
+      shadowMesh.dispose();
+      shadowMesh = null;
+    }
+    if (shadowBaseMesh) {
+      shadowBaseMesh.dispose();
+      shadowBaseMesh = null;
+    }
+  }
+
   // Starting positions for each team
   const playerPositions = [
     { x: 1, z: 1 },
@@ -256,6 +602,11 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
         selection.customization
       );
       units.push(unit);
+    }
+
+    // Set initial facing for all units (face average enemy position)
+    for (const unit of units) {
+      faceAverageEnemyPosition(unit);
     }
 
     // Start the game after all units are loaded
@@ -458,24 +809,42 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
     createCornerIndicators(unit);
 
     updateTurnIndicator();
+
+    // Initialize turn state for preview/undo system
+    turnState = {
+      unit,
+      actionsRemaining: 2,
+      pendingActions: [],
+      originalPosition: { x: unit.gridX, z: unit.gridZ },
+      originalFacing: unit.facing,
+    };
+
+    // Call turn start callback (for command menu update)
+    if (onTurnStartCallback) {
+      onTurnStartCallback(unit);
+    }
   }
 
   function endCurrentUnitTurn(): void {
     const unit = currentUnit;
     if (!unit) return;
 
-    // Calculate speed bonus for next turn only
-    // Skip move = +0.5, skip action = +0.5, max +1
-    let bonus = 0;
-    if (!unit.hasMoved) bonus += 0.5;
-    if (!unit.hasAttacked) bonus += 0.5;
-    unit.speedBonus = bonus;
+    // Calculate speed bonus based on unused actions
+    // Each unused action gives +0.5 speed bonus for next turn
+    const unusedActions = turnState?.actionsRemaining ?? 0;
+    unit.speedBonus = unusedActions * 0.5;
+
+    // Clear turn state
+    turnState = null;
+    currentActionMode = "none";
 
     // Mark as exhausted visually
     setUnitExhausted(unit);
 
-    // Clear corner indicators
+    // Clear corner indicators and previews
     clearCornerIndicators();
+    clearShadowPreview();
+    clearAttackPreview();
 
     lastActingTeam = unit.team;
     clearHighlights();
@@ -517,8 +886,24 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
     healableUnits = [];
   }
 
+  function hasActionsRemaining(): boolean {
+    return turnState !== null && turnState.actionsRemaining > 0;
+  }
+
+  function consumeAction(): void {
+    if (turnState) {
+      turnState.actionsRemaining--;
+      updateCommandMenu();
+
+      // Auto-end turn when no actions remaining
+      if (turnState.actionsRemaining <= 0) {
+        setTimeout(() => endTurn(), 100);  // Small delay for visual feedback
+      }
+    }
+  }
+
   function getValidMoveTiles(unit: Unit): { x: number; z: number }[] {
-    if (unit.hasMoved) return []; // Already moved this turn
+    if (!hasActionsRemaining()) return []; // No actions remaining
     const valid: { x: number; z: number }[] = [];
     for (let x = 0; x < GRID_SIZE; x++) {
       for (let z = 0; z < GRID_SIZE; z++) {
@@ -535,7 +920,7 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
   }
 
   function getAttackableEnemies(unit: Unit): Unit[] {
-    if (unit.hasAttacked) return []; // Already attacked this turn
+    if (!hasActionsRemaining()) return []; // No actions remaining
     return units.filter(u => {
       if (u.team === unit.team) return false;
       const distance = Math.abs(u.gridX - unit.gridX) + Math.abs(u.gridZ - unit.gridZ);
@@ -544,8 +929,8 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
   }
 
   function getHealableAllies(unit: Unit): Unit[] {
-    // Only support can heal, and only if hasn't attacked this turn
-    if (unit.healAmount <= 0 || unit.hasAttacked) return [];
+    // Only support can heal, needs actions remaining
+    if (unit.healAmount <= 0 || !hasActionsRemaining()) return [];
     return units.filter(u => {
       if (u.team !== unit.team) return false; // Must be same team
       if (u.hp >= u.maxHp) return false; // Already at full health
@@ -585,6 +970,251 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
       tile.material = healableMaterial;
       highlightedTiles.push(tile);
     }
+  }
+
+  // Highlight attack targets with LOS consideration (for attack mode)
+  function highlightAttackTargets(unit: Unit, fromX?: number, fromZ?: number): void {
+    clearHighlights();
+    attackableUnits = [];
+
+    if (!hasActionsRemaining()) return;
+
+    const x = fromX ?? unit.gridX;
+    const z = fromZ ?? unit.gridZ;
+
+    // Get valid attack tiles with LOS info
+    const attackTiles = getValidAttackTiles(unit, x, z);
+
+    // Check each enemy
+    for (const enemy of units) {
+      if (enemy.team === unit.team) continue;
+      if (enemy.hp <= 0) continue;
+
+      // Find if this enemy's tile is in our attack tiles
+      const tileInfo = attackTiles.find(t => t.x === enemy.gridX && t.z === enemy.gridZ);
+      if (tileInfo) {
+        const tile = tiles[enemy.gridX][enemy.gridZ];
+        if (tileInfo.hasLOS) {
+          tile.material = attackableMaterial;
+          attackableUnits.push(enemy);
+        } else {
+          tile.material = blockedMaterial;
+        }
+        highlightedTiles.push(tile);
+      }
+    }
+
+    // Highlight current position (or shadow position)
+    const positionTile = tiles[x][z];
+    positionTile.material = selectedMaterial;
+    highlightedTiles.push(positionTile);
+  }
+
+  // Get attackable enemies with LOS check
+  function getAttackableEnemiesWithLOS(unit: Unit, fromX?: number, fromZ?: number): Unit[] {
+    if (!hasActionsRemaining()) return [];
+
+    const x = fromX ?? unit.gridX;
+    const z = fromZ ?? unit.gridZ;
+
+    const attackTiles = getValidAttackTiles(unit, x, z);
+
+    return units.filter(enemy => {
+      if (enemy.team === unit.team) return false;
+      if (enemy.hp <= 0) return false;
+
+      const tileInfo = attackTiles.find(t => t.x === enemy.gridX && t.z === enemy.gridZ);
+      return tileInfo?.hasLOS ?? false;
+    });
+  }
+
+  // ============================================
+  // ABILITY FUNCTIONS
+  // ============================================
+
+  // Highlight healable allies for Medic's Heal ability
+  function highlightHealTargets(unit: Unit): void {
+    clearHighlights();
+    healableUnits = [];
+
+    if (!hasActionsRemaining() || unit.healAmount <= 0) return;
+
+    // Can heal self or adjacent allies
+    for (const ally of units) {
+      if (ally.team !== unit.team) continue;
+      if (ally.hp >= ally.maxHp) continue;  // Already at full health
+
+      const distance = Math.abs(ally.gridX - unit.gridX) + Math.abs(ally.gridZ - unit.gridZ);
+      if (distance <= 1) {  // Self (0) or adjacent (1)
+        const tile = tiles[ally.gridX][ally.gridZ];
+        tile.material = healableMaterial;
+        highlightedTiles.push(tile);
+        healableUnits.push(ally);
+      }
+    }
+
+    // Highlight current position
+    const currentTile = tiles[unit.gridX][unit.gridZ];
+    if (!highlightedTiles.includes(currentTile)) {
+      currentTile.material = selectedMaterial;
+      highlightedTiles.push(currentTile);
+    }
+  }
+
+  // Toggle Conceal for Operator (damage type)
+  function toggleConceal(unit: Unit): void {
+    unit.isConcealed = !unit.isConcealed;
+
+    if (unit.isConcealed) {
+      // Make model semi-transparent
+      if (unit.modelMeshes) {
+        unit.modelMeshes.forEach(mesh => {
+          if (mesh.material) {
+            (mesh.material as PBRMaterial).alpha = 0.4;
+          }
+        });
+      }
+      // Make base semi-transparent
+      const baseMat = unit.baseMesh.material as StandardMaterial;
+      baseMat.alpha = 0.5;
+
+      console.log(`${unit.team} ${unit.type} activates Conceal!`);
+    } else {
+      // Restore full visibility
+      if (unit.modelMeshes) {
+        unit.modelMeshes.forEach(mesh => {
+          if (mesh.material) {
+            (mesh.material as PBRMaterial).alpha = 1.0;
+          }
+        });
+      }
+      const baseMat = unit.baseMesh.material as StandardMaterial;
+      baseMat.alpha = 1.0;
+
+      console.log(`${unit.team} ${unit.type} deactivates Conceal.`);
+    }
+
+    // Play interact animation
+    if (unit.modelMeshes) {
+      const weaponMeshes = unit.modelMeshes.filter(m =>
+        m.name.toLowerCase().includes("sword") || m.name.toLowerCase().includes("pistol")
+      );
+      weaponMeshes.forEach(m => m.setEnabled(false));
+
+      playAnimation(unit, "Interact", false, () => {
+        const isMelee = unit.customization?.combatStyle === "melee";
+        unit.modelMeshes?.forEach(m => {
+          if (m.name.toLowerCase().includes("sword")) {
+            m.setEnabled(isMelee);
+          } else if (m.name.toLowerCase().includes("pistol")) {
+            m.setEnabled(!isMelee);
+          }
+        });
+        playIdleAnimation(unit);
+      });
+    }
+
+    consumeAction();
+  }
+
+  // Cover tiles tracking for visual display
+  let coverTileMeshes: Mesh[] = [];
+
+  // Toggle Cover for Soldier (tank type)
+  function toggleCover(unit: Unit): void {
+    unit.isCovering = !unit.isCovering;
+
+    // Clear existing cover visualization
+    clearCoverVisualization();
+
+    if (unit.isCovering) {
+      // Get covered tiles based on weapon type
+      const isMelee = unit.customization?.combatStyle === "melee";
+      let coveredTiles: { x: number; z: number }[];
+
+      if (isMelee) {
+        // Sword: Cover all 4 adjacent ordinal tiles
+        coveredTiles = getAdjacentOrdinalTiles(unit.gridX, unit.gridZ);
+      } else {
+        // Gun: Cover all tiles in LOS that they could shoot (not adjacent)
+        coveredTiles = getTilesInLOS(unit.gridX, unit.gridZ, true);
+      }
+
+      // Create pulsing border visualization for covered tiles
+      for (const { x, z } of coveredTiles) {
+        createCoverBorder(x, z, unit.teamColor);
+      }
+
+      console.log(`${unit.team} ${unit.type} activates Cover! (${coveredTiles.length} tiles)`);
+    } else {
+      console.log(`${unit.team} ${unit.type} deactivates Cover.`);
+    }
+
+    // Play interact animation
+    if (unit.modelMeshes) {
+      const weaponMeshes = unit.modelMeshes.filter(m =>
+        m.name.toLowerCase().includes("sword") || m.name.toLowerCase().includes("pistol")
+      );
+      weaponMeshes.forEach(m => m.setEnabled(false));
+
+      playAnimation(unit, "Interact", false, () => {
+        const isMelee = unit.customization?.combatStyle === "melee";
+        unit.modelMeshes?.forEach(m => {
+          if (m.name.toLowerCase().includes("sword")) {
+            m.setEnabled(isMelee);
+          } else if (m.name.toLowerCase().includes("pistol")) {
+            m.setEnabled(!isMelee);
+          }
+        });
+        playIdleAnimation(unit);
+      });
+    }
+
+    consumeAction();
+  }
+
+  function createCoverBorder(tileX: number, tileZ: number, color: Color3): void {
+    const borderThickness = 0.04;
+    const borderHeight = 0.05;
+    const tileHalf = (TILE_SIZE - TILE_GAP) / 2;
+
+    const worldX = tileX * TILE_SIZE - gridOffset;
+    const worldZ = tileZ * TILE_SIZE - gridOffset;
+
+    const borderMat = new StandardMaterial(`coverBorderMat_${tileX}_${tileZ}`, scene);
+    borderMat.diffuseColor = color;
+    borderMat.emissiveColor = color.scale(0.6);
+    borderMat.alpha = 0.8;
+
+    // Create 4 border edges
+    const edges = [
+      { width: TILE_SIZE - TILE_GAP, depth: borderThickness, offsetX: 0, offsetZ: tileHalf },
+      { width: TILE_SIZE - TILE_GAP, depth: borderThickness, offsetX: 0, offsetZ: -tileHalf },
+      { width: borderThickness, depth: TILE_SIZE - TILE_GAP, offsetX: tileHalf, offsetZ: 0 },
+      { width: borderThickness, depth: TILE_SIZE - TILE_GAP, offsetX: -tileHalf, offsetZ: 0 },
+    ];
+
+    for (const edge of edges) {
+      const borderMesh = MeshBuilder.CreateBox(`coverBorder_${tileX}_${tileZ}`, {
+        width: edge.width,
+        height: borderHeight,
+        depth: edge.depth,
+      }, scene);
+      borderMesh.material = borderMat;
+      borderMesh.position = new Vector3(
+        worldX + edge.offsetX,
+        0.08,
+        worldZ + edge.offsetZ
+      );
+      coverTileMeshes.push(borderMesh);
+    }
+  }
+
+  function clearCoverVisualization(): void {
+    for (const mesh of coverTileMeshes) {
+      mesh.dispose();
+    }
+    coverTileMeshes = [];
   }
 
   function isValidMove(x: number, z: number): boolean {
@@ -654,6 +1284,52 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
   }
 
   function attackUnit(attacker: Unit, defender: Unit): void {
+    // Face the defender
+    setUnitFacing(attacker, defender.gridX, defender.gridZ);
+
+    // Play attack animation based on combat style
+    const isMelee = attacker.customization?.combatStyle === "melee";
+    const attackAnim = isMelee ? "Sword_Slash" : "Gun_Shoot";
+
+    playAnimation(attacker, attackAnim, false, () => {
+      // Return to idle after attack
+      playIdleAnimation(attacker);
+    });
+
+    // Check if defender is concealed - break concealment and negate damage
+    if (defender.isConcealed) {
+      defender.isConcealed = false;
+      // Restore visibility
+      if (defender.modelMeshes) {
+        defender.modelMeshes.forEach(mesh => {
+          if (mesh.material) {
+            (mesh.material as PBRMaterial).alpha = 1.0;
+          }
+        });
+      }
+      const defenderBaseMat = defender.baseMesh.material as StandardMaterial;
+      defenderBaseMat.alpha = 1.0;
+
+      console.log(`${defender.team} ${defender.type}'s Conceal was broken! Damage negated!`);
+      // Play hit sound but no damage
+      if (attacker.type === "support") {
+        playSfx(sfx.hitLight);
+      } else if (attacker.type === "tank") {
+        playSfx(sfx.hitMedium);
+      } else if (attacker.type === "damage") {
+        playSfx(sfx.hitHeavy);
+      }
+
+      // Play hit receive animation without damage
+      playAnimation(defender, "HitReceive", false, () => {
+        playIdleAnimation(defender);
+      });
+
+      consumeAction();
+      return;
+    }
+
+    // Apply damage
     defender.hp -= attacker.attack;
     console.log(`${attacker.team} ${attacker.type} attacks ${defender.team} ${defender.type} for ${attacker.attack} damage! (${defender.hp}/${defender.maxHp} HP)`);
 
@@ -666,27 +1342,36 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
       playSfx(sfx.hitHeavy);
     }
 
-    attacker.hasAttacked = true;
-    setUnitExhausted(attacker);
+    consumeAction();
 
     updateHpBar(defender);
 
     if (defender.hp <= 0) {
       console.log(`${defender.team} ${defender.type} was defeated!`);
-      defender.mesh.dispose();
-      defender.baseMesh.dispose();
-      if (defender.hpBar) defender.hpBar.dispose();
-      if (defender.hpBarBg) defender.hpBarBg.dispose();
 
-      // Dispose 3D model
-      if (defender.modelRoot) {
-        defender.modelRoot.dispose();
-      }
-      if (defender.animationGroups) {
-        defender.animationGroups.forEach(ag => ag.dispose());
+      // Clear cover visualization if they were covering
+      if (defender.isCovering) {
+        defender.isCovering = false;
+        clearCoverVisualization();
       }
 
-      // Remove from units array
+      // Play death animation before disposing
+      playAnimation(defender, "Death", false, () => {
+        defender.mesh.dispose();
+        defender.baseMesh.dispose();
+        if (defender.hpBar) defender.hpBar.dispose();
+        if (defender.hpBarBg) defender.hpBarBg.dispose();
+
+        // Dispose 3D model
+        if (defender.modelRoot) {
+          defender.modelRoot.dispose();
+        }
+        if (defender.animationGroups) {
+          defender.animationGroups.forEach(ag => ag.dispose());
+        }
+      });
+
+      // Remove from units array immediately (for game logic)
       const index = units.indexOf(defender);
       if (index > -1) units.splice(index, 1);
 
@@ -697,18 +1382,49 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
       }
 
       checkWinCondition();
+    } else {
+      // Play hit receive animation
+      playAnimation(defender, "HitReceive", false, () => {
+        playIdleAnimation(defender);
+      });
     }
   }
 
   function healUnit(healer: Unit, target: Unit): void {
+    // Face the target
+    if (healer !== target) {
+      setUnitFacing(healer, target.gridX, target.gridZ);
+    }
+
+    // Hide weapons for heal animation
+    if (healer.modelMeshes) {
+      const weaponMeshes = healer.modelMeshes.filter(m =>
+        m.name.toLowerCase().includes("sword") || m.name.toLowerCase().includes("pistol")
+      );
+      weaponMeshes.forEach(m => m.setEnabled(false));
+
+      // Play interact animation
+      playAnimation(healer, "Interact", false, () => {
+        // Show weapons again
+        const isMelee = healer.customization?.combatStyle === "melee";
+        healer.modelMeshes?.forEach(m => {
+          if (m.name.toLowerCase().includes("sword")) {
+            m.setEnabled(isMelee);
+          } else if (m.name.toLowerCase().includes("pistol")) {
+            m.setEnabled(!isMelee);
+          }
+        });
+        playIdleAnimation(healer);
+      });
+    }
+
     const healedAmount = Math.min(healer.healAmount, target.maxHp - target.hp);
     target.hp += healedAmount;
     console.log(`${healer.team} ${healer.type} heals ${target.team} ${target.type} for ${healedAmount} HP! (${target.hp}/${target.maxHp} HP)`);
 
     playSfx(sfx.heal);
 
-    healer.hasAttacked = true; // Uses the same action as attacking
-    setUnitExhausted(healer);
+    consumeAction();
 
     updateHpBar(target);
   }
@@ -777,10 +1493,93 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
     return unit === currentUnit;
   }
 
+  // Shadow position tracking for attack preview
+  let shadowPosition: { x: number; z: number } | null = null;
+
+  // Attack preview tiles when hovering during move mode
+  let attackPreviewTiles: Mesh[] = [];
+
+  function showAttackPreview(unit: Unit, fromX: number, fromZ: number): void {
+    clearAttackPreview();
+
+    if (unit.hasAttacked) return;
+
+    // Get valid attack tiles from shadow position
+    const attackTiles = getValidAttackTiles(unit, fromX, fromZ);
+
+    // Show preview on enemy tiles
+    for (const enemy of units) {
+      if (enemy.team === unit.team) continue;
+      if (enemy.hp <= 0) continue;
+
+      const tileInfo = attackTiles.find(t => t.x === enemy.gridX && t.z === enemy.gridZ);
+      if (tileInfo) {
+        const tile = tiles[enemy.gridX][enemy.gridZ];
+        // Use a lighter version of attack/blocked colors for preview
+        if (tileInfo.hasLOS) {
+          tile.material = attackableMaterial;
+        } else {
+          tile.material = blockedMaterial;
+        }
+        attackPreviewTiles.push(tile);
+      }
+    }
+  }
+
+  function clearAttackPreview(): void {
+    for (const tile of attackPreviewTiles) {
+      const { gridX, gridZ } = tile.metadata;
+      // Only reset if not part of main highlights
+      if (!highlightedTiles.includes(tile)) {
+        tile.material = getDefaultTileMaterial(gridX, gridZ);
+      }
+    }
+    attackPreviewTiles = [];
+  }
+
+  // Hover handling for shadow preview
+  scene.onPointerObservable.add((pointerInfo) => {
+    if (gameOver || isAnimatingMovement) return;
+    if (pointerInfo.type !== PointerEventTypes.POINTERMOVE) return;
+    if (currentActionMode !== "move" || !selectedUnit) return;
+
+    const pickResult = scene.pick(scene.pointerX, scene.pointerY);
+    if (!pickResult?.pickedMesh) {
+      clearShadowPreview();
+      clearAttackPreview();
+      shadowPosition = null;
+      return;
+    }
+
+    const metadata = pickResult.pickedMesh.metadata;
+    if (metadata?.type === "tile") {
+      const { gridX, gridZ } = metadata;
+      if (isValidMove(gridX, gridZ)) {
+        // Show shadow at this position
+        createShadowPreview(selectedUnit, gridX, gridZ);
+        shadowPosition = { x: gridX, z: gridZ };
+        // Show attack preview from this position
+        showAttackPreview(selectedUnit, gridX, gridZ);
+      } else {
+        clearShadowPreview();
+        clearAttackPreview();
+        shadowPosition = null;
+      }
+    } else {
+      clearShadowPreview();
+      clearAttackPreview();
+      shadowPosition = null;
+    }
+  });
+
   // Click handling
   scene.onPointerObservable.add((pointerInfo) => {
     if (gameOver) return;
+    if (isAnimatingMovement) return;  // Block input during movement animation
     if (pointerInfo.type !== PointerEventTypes.POINTERPICK) return;
+
+    // Check action mode for menu-driven actions
+    const isMenuDriven = currentActionMode !== "none";
 
     const pickedMesh = pointerInfo.pickInfo?.pickedMesh;
     if (!pickedMesh) return;
@@ -792,29 +1591,46 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
 
       if (selectedUnit) {
         if (isValidMove(gridX, gridZ)) {
-          moveUnit(selectedUnit, gridX, gridZ, gridOffset);
-          updateCornerIndicators(selectedUnit);
-          selectedUnit.hasMoved = true;
+          const movingUnit = selectedUnit;
+          clearHighlights();
+          clearShadowPreview();
+          clearAttackPreview();
+          shadowPosition = null;
+          currentActionMode = "none";
 
-          // After moving, check if can still attack
-          if (!selectedUnit.hasAttacked) {
-            // Re-highlight to show attack/heal options from new position
-            highlightValidActions(selectedUnit);
+          // Animate movement
+          animateMovement(movingUnit, gridX, gridZ, () => {
+            updateCornerIndicators(movingUnit);
+            consumeAction();
 
-            // If no actions left, deselect
-            const canAttack = getAttackableEnemies(selectedUnit).length > 0;
-            const canHeal = getHealableAllies(selectedUnit).length > 0;
-            if (!canAttack && !canHeal) {
-              clearHighlights();
+            // After moving, check if can still act (if actions remain)
+            if (hasActionsRemaining()) {
+              // Re-highlight to show attack/heal options from new position
+              selectedUnit = movingUnit;
+              highlightValidActions(movingUnit);
+
+              // If no valid actions, deselect
+              const canAttack = getAttackableEnemies(movingUnit).length > 0;
+              const canHeal = getHealableAllies(movingUnit).length > 0;
+              const canMove = getValidMoveTiles(movingUnit).length > 0;
+              if (!canAttack && !canHeal && !canMove) {
+                clearHighlights();
+                selectedUnit = null;
+              }
+            } else {
               selectedUnit = null;
             }
-          } else {
-            clearHighlights();
-            selectedUnit = null;
-          }
+          });
+
+          // Clear selection during animation
+          selectedUnit = null;
         } else {
           clearHighlights();
+          clearShadowPreview();
+          clearAttackPreview();
+          shadowPosition = null;
           selectedUnit = null;
+          if (isMenuDriven) currentActionMode = "none";
         }
       }
     } else if (metadata?.type === "unit") {
@@ -839,6 +1655,7 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
           healUnit(selectedUnit, clickedUnit);
           clearHighlights();
           selectedUnit = null;
+          currentActionMode = "none";
           return;
         }
       }
@@ -903,6 +1720,279 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
     camera.alpha -= Math.PI / 2;
   });
   gui.addControl(rotateRightBtn);
+
+  // ============================================
+  // COMMAND MENU UI
+  // ============================================
+
+  // Main menu container - bottom left
+  const commandMenu = new Rectangle("commandMenu");
+  commandMenu.width = "200px";
+  commandMenu.height = "280px";
+  commandMenu.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_LEFT;
+  commandMenu.verticalAlignment = Control.VERTICAL_ALIGNMENT_BOTTOM;
+  commandMenu.left = "20px";
+  commandMenu.top = "-20px";
+  commandMenu.background = "#1a1a2e";
+  commandMenu.cornerRadius = 10;
+  commandMenu.thickness = 2;
+  commandMenu.color = "#4488ff";  // Will be updated to team color
+  commandMenu.isVisible = false;
+  gui.addControl(commandMenu);
+
+  // Menu layout
+  const menuStack = new StackPanel("menuStack");
+  menuStack.width = "100%";
+  menuStack.paddingTop = "10px";
+  menuStack.paddingLeft = "10px";
+  menuStack.paddingRight = "10px";
+  commandMenu.addControl(menuStack);
+
+  // Unit name header
+  const menuUnitName = new TextBlock("menuUnitName");
+  menuUnitName.text = "SOLDIER";
+  menuUnitName.color = "#ffffff";
+  menuUnitName.fontSize = 18;
+  menuUnitName.fontWeight = "bold";
+  menuUnitName.height = "30px";
+  menuUnitName.textHorizontalAlignment = Control.HORIZONTAL_ALIGNMENT_CENTER;
+  menuStack.addControl(menuUnitName);
+
+  // Actions remaining text
+  const menuActionsText = new TextBlock("menuActionsText");
+  menuActionsText.text = "Actions: 2/2";
+  menuActionsText.color = "#aaaaaa";
+  menuActionsText.fontSize = 12;
+  menuActionsText.height = "20px";
+  menuActionsText.textHorizontalAlignment = Control.HORIZONTAL_ALIGNMENT_CENTER;
+  menuStack.addControl(menuActionsText);
+
+  // Separator
+  const menuSeparator1 = new Rectangle("menuSeparator1");
+  menuSeparator1.width = "90%";
+  menuSeparator1.height = "2px";
+  menuSeparator1.background = "#333355";
+  menuSeparator1.thickness = 0;
+  menuStack.addControl(menuSeparator1);
+
+  // Action buttons container
+  const actionButtonsStack = new StackPanel("actionButtons");
+  actionButtonsStack.width = "100%";
+  actionButtonsStack.height = "100px";
+  actionButtonsStack.paddingTop = "5px";
+  menuStack.addControl(actionButtonsStack);
+
+  // Move button
+  const moveBtn = Button.CreateSimpleButton("moveBtn", "Move");
+  moveBtn.width = "100%";
+  moveBtn.height = "28px";
+  moveBtn.color = "white";
+  moveBtn.background = "#335588";
+  moveBtn.cornerRadius = 5;
+  moveBtn.fontSize = 14;
+  moveBtn.paddingBottom = "3px";
+  moveBtn.onPointerClickObservable.add(() => {
+    if (currentUnit && !isAnimatingMovement) {
+      currentActionMode = "move";
+      selectedUnit = currentUnit;
+      highlightValidActions(currentUnit);
+    }
+  });
+  actionButtonsStack.addControl(moveBtn);
+
+  // Attack button
+  const attackBtn = Button.CreateSimpleButton("attackBtn", "Attack");
+  attackBtn.width = "100%";
+  attackBtn.height = "28px";
+  attackBtn.color = "white";
+  attackBtn.background = "#883333";
+  attackBtn.cornerRadius = 5;
+  attackBtn.fontSize = 14;
+  attackBtn.paddingBottom = "3px";
+  attackBtn.onPointerClickObservable.add(() => {
+    if (currentUnit && !isAnimatingMovement) {
+      currentActionMode = "attack";
+      selectedUnit = currentUnit;
+      // Highlight attack targets with LOS consideration
+      highlightAttackTargets(currentUnit);
+    }
+  });
+  actionButtonsStack.addControl(attackBtn);
+
+  // Ability button (changes based on unit type)
+  const abilityBtn = Button.CreateSimpleButton("abilityBtn", "Ability");
+  abilityBtn.width = "100%";
+  abilityBtn.height = "28px";
+  abilityBtn.color = "white";
+  abilityBtn.background = "#338855";
+  abilityBtn.cornerRadius = 5;
+  abilityBtn.fontSize = 14;
+  abilityBtn.onPointerClickObservable.add(() => {
+    if (currentUnit && !isAnimatingMovement && hasActionsRemaining()) {
+      if (currentUnit.type === "support") {
+        // Heal mode - highlight healable allies
+        currentActionMode = "ability";
+        selectedUnit = currentUnit;
+        highlightHealTargets(currentUnit);
+      } else if (currentUnit.type === "damage") {
+        // Conceal - toggle immediately
+        toggleConceal(currentUnit);
+      } else if (currentUnit.type === "tank") {
+        // Cover - toggle immediately
+        toggleCover(currentUnit);
+      }
+    }
+  });
+  actionButtonsStack.addControl(abilityBtn);
+
+  // Separator
+  const menuSeparator2 = new Rectangle("menuSeparator2");
+  menuSeparator2.width = "90%";
+  menuSeparator2.height = "2px";
+  menuSeparator2.background = "#333355";
+  menuSeparator2.thickness = 0;
+  menuStack.addControl(menuSeparator2);
+
+  // Turn preview section
+  const previewLabel = new TextBlock("previewLabel");
+  previewLabel.text = "Turn Preview:";
+  previewLabel.color = "#888888";
+  previewLabel.fontSize = 11;
+  previewLabel.height = "18px";
+  previewLabel.textHorizontalAlignment = Control.HORIZONTAL_ALIGNMENT_LEFT;
+  previewLabel.paddingTop = "5px";
+  menuStack.addControl(previewLabel);
+
+  const previewText = new TextBlock("previewText");
+  previewText.text = "(no actions queued)";
+  previewText.color = "#aaaaaa";
+  previewText.fontSize = 11;
+  previewText.height = "35px";
+  previewText.textHorizontalAlignment = Control.HORIZONTAL_ALIGNMENT_LEFT;
+  previewText.textWrapping = true;
+  menuStack.addControl(previewText);
+
+  // Bottom buttons (Undo / Execute)
+  const bottomButtonsGrid = new Grid("bottomButtons");
+  bottomButtonsGrid.width = "100%";
+  bottomButtonsGrid.height = "35px";
+  bottomButtonsGrid.addColumnDefinition(0.5);
+  bottomButtonsGrid.addColumnDefinition(0.5);
+  bottomButtonsGrid.addRowDefinition(1);
+  menuStack.addControl(bottomButtonsGrid);
+
+  const undoBtn = Button.CreateSimpleButton("undoBtn", "Undo");
+  undoBtn.width = "95%";
+  undoBtn.height = "28px";
+  undoBtn.color = "#ff8888";
+  undoBtn.background = "#442222";
+  undoBtn.cornerRadius = 5;
+  undoBtn.fontSize = 12;
+  undoBtn.onPointerClickObservable.add(() => {
+    // TODO: Implement undo
+    if (turnState && turnState.pendingActions.length > 0) {
+      turnState.pendingActions.pop();
+      updateMenuPreview();
+    }
+  });
+  bottomButtonsGrid.addControl(undoBtn, 0, 0);
+
+  const executeBtn = Button.CreateSimpleButton("executeBtn", "Execute");
+  executeBtn.width = "95%";
+  executeBtn.height = "28px";
+  executeBtn.color = "white";
+  executeBtn.background = "#338833";
+  executeBtn.cornerRadius = 5;
+  executeBtn.fontSize = 12;
+  executeBtn.onPointerClickObservable.add(() => {
+    // TODO: Execute all pending actions
+    if (currentUnit) {
+      endTurn();
+    }
+  });
+  bottomButtonsGrid.addControl(executeBtn, 0, 1);
+
+  // Function to update menu for current unit
+  function updateCommandMenu(): void {
+    if (!currentUnit) {
+      commandMenu.isVisible = false;
+      return;
+    }
+
+    commandMenu.isVisible = true;
+
+    // Update team color border
+    const r = Math.round(currentUnit.teamColor.r * 255).toString(16).padStart(2, '0');
+    const g = Math.round(currentUnit.teamColor.g * 255).toString(16).padStart(2, '0');
+    const b = Math.round(currentUnit.teamColor.b * 255).toString(16).padStart(2, '0');
+    commandMenu.color = `#${r}${g}${b}`;
+
+    // Update unit name
+    const unitNames: Record<string, string> = {
+      tank: "SOLDIER",
+      damage: "OPERATOR",
+      support: "MEDIC"
+    };
+    menuUnitName.text = unitNames[currentUnit.type] || currentUnit.type.toUpperCase();
+
+    // Update ability button based on unit type
+    const abilityNames: Record<string, string> = {
+      tank: "Cover",
+      damage: "Conceal",
+      support: "Heal"
+    };
+    if (abilityBtn.textBlock) {
+      abilityBtn.textBlock.text = abilityNames[currentUnit.type] || "Ability";
+    }
+
+    // Update actions text from turnState
+    const remaining = turnState?.actionsRemaining ?? 0;
+    menuActionsText.text = `Actions: ${remaining}/2`;
+
+    // Update preview section
+    updateMenuPreview();
+  }
+
+  function updateMenuPreview(): void {
+    if (!currentUnit) {
+      previewText.text = "";
+      return;
+    }
+
+    const lines: string[] = [];
+
+    // Show unit status effects
+    if (currentUnit.isConcealed) {
+      lines.push("* CONCEALED");
+    }
+    if (currentUnit.isCovering) {
+      lines.push("* COVERING");
+    }
+
+    // Show available options based on remaining actions
+    const remaining = turnState?.actionsRemaining ?? 0;
+    if (remaining > 0) {
+      const canMove = getValidMoveTiles(currentUnit).length > 0;
+      const canAttack = getAttackableEnemies(currentUnit).length > 0;
+      const canHeal = currentUnit.type === "support" && getHealableAllies(currentUnit).length > 0;
+
+      if (canMove || canAttack || canHeal) {
+        lines.push(`Options:`);
+        if (canMove) lines.push("  - Move available");
+        if (canAttack) lines.push("  - Attack available");
+        if (canHeal) lines.push("  - Heal available");
+      } else {
+        lines.push("No targets in range");
+      }
+    } else {
+      lines.push("Turn complete");
+    }
+
+    previewText.text = lines.join("\n");
+  }
+
+  // Register menu update callback
+  onTurnStartCallback = () => updateCommandMenu();
 
   // Game is initialized when spawnAllUnits completes (calls startGame)
 
@@ -1081,9 +2171,9 @@ async function createUnit(
     healAmount: stats.healAmount,
     hpBar,
     hpBarBg,
+    originalColor,
     hasMoved: false,
     hasAttacked: false,
-    originalColor,
     speed: 1,
     speedBonus: 0,
     accumulator: 0,
@@ -1093,6 +2183,9 @@ async function createUnit(
     animationGroups,
     customization: c,
     teamColor,
+    facing: 0,  // Will be set after spawn
+    isConcealed: false,
+    isCovering: false,
   };
 }
 
