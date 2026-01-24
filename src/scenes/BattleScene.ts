@@ -244,16 +244,11 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
     // Stop all current animations
     unit.animationGroups.forEach(ag => ag.stop());
 
-    // Find and play the requested animation
     const anim = unit.animationGroups.find(ag => ag.name === animName);
     if (anim) {
-      console.log(`Playing animation "${animName}" for ${unit.team} ${unit.type}`);
       anim.start(loop);
       if (onComplete && !loop) {
-        anim.onAnimationEndObservable.addOnce(() => {
-          console.log(`Animation "${animName}" completed for ${unit.team} ${unit.type}`);
-          onComplete();
-        });
+        anim.onAnimationEndObservable.addOnce(() => onComplete());
       }
     } else {
       // Animation not found - call onComplete immediately so game doesn't hang
@@ -268,90 +263,15 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
   }
 
   // ============================================
-  // FACING SYSTEM (Encapsulated)
+  // FACING SYSTEM
   // ============================================
-  //
-  // Each unit has a FacingConfig that stores:
-  // - currentAngle: the world-space angle the unit should face
-  // - baseOffset: rotation offset for the model's default orientation
-  // - isFlipped: whether the model has negative X scale (right-handed)
-  //
-  // Key functions:
-  // - initFacing(unit): Initialize facing config based on customization
-  // - faceTarget(unit, x, z): Face a specific grid position
-  // - faceClosestEnemy(unit): Face the nearest enemy
-  // - applyFacing(unit): Apply the current facing angle to the model
-  //
-  // TESTING JIG: Press 'f' to log current facing debug info
-  // ============================================
-
-  // Rotation offsets determined empirically for each model configuration
-  const FACING_OFFSET_NORMAL = 0;           // Non-flipped models (left-handed)
-  const FACING_OFFSET_FLIPPED = 0;          // Flipped models (right-handed) - just negate angle
-
-  // Testing jig state
-  let isInitialSetup = true;  // Skip debug during spawn
-  let facingDebugHighlight: Mesh | null = null;
-  let lastFacingDebugInfo: {
-    unit: Unit;
-    unitPos: { x: number; z: number };
-    targetPos: { x: number; z: number };
-    handedness: string;
-  } | null = null;
-
-  // Create/update the yellow highlight for facing target
-  function updateFacingDebugHighlight(targetX: number, targetZ: number): void {
-    if (isInitialSetup) return;  // Skip during initial spawn
-
-    // Remove old highlight
-    if (facingDebugHighlight) {
-      facingDebugHighlight.dispose();
-    }
-
-    // Create yellow highlight on target tile
-    facingDebugHighlight = MeshBuilder.CreateBox(
-      "facingDebugHighlight",
-      { width: TILE_SIZE - TILE_GAP + 0.1, height: 0.15, depth: TILE_SIZE - TILE_GAP + 0.1 },
-      scene
-    );
-    const highlightMat = new StandardMaterial("facingHighlightMat", scene);
-    highlightMat.diffuseColor = new Color3(1, 1, 0);  // Yellow
-    highlightMat.emissiveColor = new Color3(0.5, 0.5, 0);
-    highlightMat.alpha = 0.6;
-    facingDebugHighlight.material = highlightMat;
-    facingDebugHighlight.position = new Vector3(
-      targetX * TILE_SIZE - gridOffset,
-      0.08,
-      targetZ * TILE_SIZE - gridOffset
-    );
-  }
-
-  // Keyboard listener for facing debug
-  window.addEventListener("keydown", (e) => {
-    if (e.key === "f" || e.key === "F") {
-      if (lastFacingDebugInfo) {
-        const info = lastFacingDebugInfo;
-        console.log(`[FACING DEBUG] Unit: ${info.unit.team} ${info.unit.type}`);
-        console.log(`[FACING DEBUG] Handedness: ${info.handedness} (isFlipped: ${info.unit.facing.isFlipped})`);
-        console.log(`[FACING DEBUG] Unit position: (${info.unitPos.x}, ${info.unitPos.z})`);
-        console.log(`[FACING DEBUG] Target position (yellow tile): (${info.targetPos.x.toFixed(1)}, ${info.targetPos.z.toFixed(1)})`);
-        console.log(`[FACING DEBUG] Current angle: ${info.unit.facing.currentAngle.toFixed(3)} rad (${(info.unit.facing.currentAngle * 180 / Math.PI).toFixed(1)} deg)`);
-        console.log(`[FACING DEBUG] Base offset: ${info.unit.facing.baseOffset.toFixed(3)} rad`);
-        if (info.unit.modelRoot) {
-          console.log(`[FACING DEBUG] Applied rotation.y: ${info.unit.modelRoot.rotation.y.toFixed(3)} rad`);
-        }
-      } else {
-        console.log(`[FACING DEBUG] No facing data yet. Move a unit first.`);
-      }
-    }
-  });
 
   // Initialize facing config for a unit
   function initFacing(unit: Unit): void {
     const isFlipped = unit.customization?.handedness === "right";
     unit.facing = {
       currentAngle: 0,
-      baseOffset: isFlipped ? FACING_OFFSET_FLIPPED : FACING_OFFSET_NORMAL,
+      baseOffset: 0,
       isFlipped: isFlipped
     };
   }
@@ -359,39 +279,17 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
   // Apply the current facing angle to the unit's model
   function applyFacing(unit: Unit): void {
     if (!unit.modelRoot) return;
-
-    // Clear quaternion (GLTF uses quaternions which override Euler)
     unit.modelRoot.rotationQuaternion = null;
-
-    // Calculate final rotation: same formula for both flipped and non-flipped
-    // The X scale flip handles mirroring internally
-    const finalRotation = unit.facing.currentAngle + unit.facing.baseOffset;
-
-    unit.modelRoot.rotation.y = finalRotation;
+    unit.modelRoot.rotation.y = unit.facing.currentAngle + unit.facing.baseOffset;
   }
 
   // Face a specific grid position
   function faceTarget(unit: Unit, targetX: number, targetZ: number): void {
     const dx = targetX - unit.gridX;
     const dz = targetZ - unit.gridZ;
-
     if (dx === 0 && dz === 0) return;
-
-    // Calculate angle from +Z axis (0 = facing +Z, positive = clockwise)
     unit.facing.currentAngle = Math.atan2(dx, dz);
-
     applyFacing(unit);
-
-    // Update debug info and highlight (skip during initial setup)
-    if (!isInitialSetup) {
-      lastFacingDebugInfo = {
-        unit,
-        unitPos: { x: unit.gridX, z: unit.gridZ },
-        targetPos: { x: targetX, z: targetZ },
-        handedness: unit.customization?.handedness ?? "left"
-      };
-      updateFacingDebugHighlight(targetX, targetZ);
-    }
   }
 
   // Face the closest living enemy
@@ -399,7 +297,6 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
     const enemies = units.filter(u => u.team !== unit.team && u.hp > 0);
     if (enemies.length === 0) return;
 
-    // Find closest by Manhattan distance
     let closest = enemies[0];
     let closestDist = Math.abs(closest.gridX - unit.gridX) + Math.abs(closest.gridZ - unit.gridZ);
 
@@ -423,11 +320,6 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
     const avgZ = enemies.reduce((sum, e) => sum + e.gridZ, 0) / enemies.length;
 
     faceTarget(unit, avgX, avgZ);
-  }
-
-  // Mark initial setup as complete (call after spawning)
-  function enableFacingDebug(): void {
-    isInitialSetup = false;
   }
 
   // Legacy alias for compatibility
@@ -571,28 +463,20 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
   let isAnimatingMovement = false;
 
   function animateMovement(unit: Unit, targetX: number, targetZ: number, onComplete?: () => void): void {
-    console.log(`[FACING] animateMovement: ${unit.team} ${unit.type} from (${unit.gridX},${unit.gridZ}) to (${targetX},${targetZ})`);
     if (!unit.modelRoot) {
-      // Fallback to instant movement if no model
       moveUnit(unit, targetX, targetZ, gridOffset);
       onComplete?.();
       return;
     }
 
     isAnimatingMovement = true;
-
-    // First, face the target (BEFORE updating gridX/gridZ)
-    console.log(`[FACING] Setting facing before move...`);
     setUnitFacing(unit, targetX, targetZ);
 
-    // Calculate world positions
     const startX = unit.gridX * TILE_SIZE - gridOffset;
     const startZ = unit.gridZ * TILE_SIZE - gridOffset;
     const endX = targetX * TILE_SIZE - gridOffset;
     const endZ = targetZ * TILE_SIZE - gridOffset;
 
-    // Update grid position immediately (for game logic)
-    console.log(`[FACING] Updating grid position from (${unit.gridX},${unit.gridZ}) to (${targetX},${targetZ})`);
     unit.gridX = targetX;
     unit.gridZ = targetZ;
 
@@ -620,10 +504,8 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
       unit.mesh.position.z = currentZ;
 
       if (t >= 1) {
-        // Animation complete
         scene.onBeforeRenderObservable.remove(moveObserver);
         isAnimatingMovement = false;
-        console.log(`[FACING] Movement animation complete. Unit now at grid (${unit.gridX},${unit.gridZ})`);
 
         // Snap to final position
         const finalX = endX;
@@ -845,9 +727,6 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
       }
     }
 
-    // Enable facing debug now that initial setup is done
-    enableFacingDebug();
-
     // Start the game after all units are loaded
     startGame();
   }
@@ -966,44 +845,6 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
     }
   });
 
-  // ============================================
-  // ROTATION TESTING JIG
-  // ============================================
-  let rotationTestStrategy: "none" | "A" | "B" = "none";
-  let rotationTestTime = 0;
-
-  // Keyboard listener for rotation test
-  window.addEventListener("keydown", (e) => {
-    if (e.key === "1") {
-      rotationTestStrategy = rotationTestStrategy === "A" ? "none" : "A";
-      console.log(`Rotation strategy: ${rotationTestStrategy} (modelRoot.rotation.y)`);
-    } else if (e.key === "2") {
-      rotationTestStrategy = rotationTestStrategy === "B" ? "none" : "B";
-      console.log(`Rotation strategy: ${rotationTestStrategy} (modelRoot.rotationQuaternion)`);
-    }
-  });
-
-  // Continuous rotation in render loop
-  scene.onBeforeRenderObservable.add(() => {
-    if (rotationTestStrategy === "none") return;
-
-    rotationTestTime += engine.getDeltaTime() / 1000;
-    const angle = rotationTestTime * 2; // 2 radians per second
-
-    for (const unit of units) {
-      if (!unit.modelRoot) continue;
-
-      if (rotationTestStrategy === "A") {
-        // Strategy A: Direct rotation.y assignment
-        unit.modelRoot.rotation.y = angle;
-      } else if (rotationTestStrategy === "B") {
-        // Strategy B: Clear quaternion first, then set rotation.y
-        unit.modelRoot.rotationQuaternion = null;
-        unit.modelRoot.rotation.y = angle;
-      }
-    }
-  });
-
   function buildFirstRoundQueue(): void {
     // Alternate teams: P1, P2, P1, P2, P1, P2
     // Within team, use loadout order
@@ -1066,7 +907,6 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
   }
 
   function startUnitTurn(unit: Unit): void {
-    console.log("startUnitTurn called for:", unit.type, unit.team);
     currentUnit = unit;
     unit.hasMoved = false;
     unit.hasAttacked = false;
@@ -1104,7 +944,6 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
   }
 
   function endCurrentUnitTurn(): void {
-    console.log("endCurrentUnitTurn called, currentUnit:", currentUnit?.type, currentUnit?.team);
     const unit = currentUnit;
     if (!unit) return;
 
@@ -1131,18 +970,10 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
     selectedUnit = null;
     currentUnit = null;
 
-    // Get next unit
     const nextUnit = getNextUnit();
-    console.log("getNextUnit returned:", nextUnit?.type, nextUnit?.team);
     if (nextUnit) {
-      // Consume the speed bonus from previous turn (it only lasts one turn)
-      // The bonus was already used in accumulator calculation, now clear it
-      // Actually, we set it above for NEXT turn, so we consume it BEFORE their turn
       startUnitTurn(nextUnit);
-      // After starting turn, clear the bonus (it was used for this turn's accumulation)
       nextUnit.speedBonus = 0;
-    } else {
-      console.log("No next unit found! Units remaining:", units.length, units.map(u => `${u.team}-${u.type}`));
     }
   }
 
@@ -1831,29 +1662,22 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
 
   // Execute all queued actions sequentially
   function executeQueuedActions(): void {
-    console.log("executeQueuedActions called, pendingActions:", turnState?.pendingActions.length);
     if (!turnState || turnState.pendingActions.length === 0) {
-      // No actions to execute, just end turn
       endCurrentUnitTurn();
       return;
     }
 
     isExecutingActions = true;
     const unit = turnState.unit;
-    const actions = [...turnState.pendingActions];  // Copy the array
+    const actions = [...turnState.pendingActions];
 
-    // Clear previews, shadow position, and intent indicators
     clearShadowPreview();
     clearAttackPreview();
     clearIntentIndicators();
     shadowPosition = null;
 
-    // Process actions sequentially
     function processNextAction(index: number): void {
-      console.log(`[FACING] processNextAction index=${index}, total actions=${actions.length}`);
       if (index >= actions.length) {
-        // All actions complete - face closest enemy before ending turn
-        console.log(`[FACING] All actions complete, calling faceClosestEnemy for ${unit.team} ${unit.type}`);
         faceClosestEnemy(unit);
         isExecutingActions = false;
         endCurrentUnitTurn();
@@ -1900,8 +1724,6 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
 
   // Execute attack (called during execution phase)
   function executeAttack(attacker: Unit, defender: Unit, onComplete: () => void): void {
-    // Face the defender
-    console.log(`[FACING] executeAttack: ${attacker.team} ${attacker.type} at (${attacker.gridX},${attacker.gridZ}) attacking ${defender.team} ${defender.type} at (${defender.gridX},${defender.gridZ})`);
     setUnitFacing(attacker, defender.gridX, defender.gridZ);
 
     // Play attack animation based on combat style
@@ -2153,8 +1975,6 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
 
       if (selectedUnit && currentActionMode === "move") {
         if (isValidMove(gridX, gridZ)) {
-          // Queue the move instead of executing immediately
-          console.log(`Queueing move to (${gridX}, ${gridZ})`);
           queueMoveAction(selectedUnit, gridX, gridZ);
         } else {
           clearHighlights();
@@ -2168,7 +1988,6 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
         // Check if there's an attackable unit on this tile
         const targetUnit = attackableUnits.find(u => u.gridX === gridX && u.gridZ === gridZ);
         if (targetUnit) {
-          console.log("Queueing attack action (via tile click)");
           queueAttackAction(selectedUnit, targetUnit);
         } else {
           // Clicked invalid tile, cancel attack mode
@@ -2199,10 +2018,7 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
       if (!clickedUnit) return;
 
       if (selectedUnit) {
-        // Check if clicking an attackable player2
-        console.log(`Click on unit: mode=${currentActionMode}, attackableUnits=${attackableUnits.length}, includes=${attackableUnits.includes(clickedUnit)}`);
         if (attackableUnits.includes(clickedUnit) && currentActionMode === "attack") {
-          console.log("Queueing attack action");
           queueAttackAction(selectedUnit, clickedUnit);
           return;
         }
@@ -2224,7 +2040,6 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
       } else if (canSelectUnit(clickedUnit)) {
         selectedUnit = clickedUnit;
         highlightValidActions(clickedUnit);
-        console.log(`Selected ${clickedUnit.team} ${clickedUnit.type} (HP: ${clickedUnit.hp}/${clickedUnit.maxHp}, ATK: ${clickedUnit.attack})`);
       }
     }
   });
@@ -2354,7 +2169,6 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
   attackBtn.fontSize = 14;
   attackBtn.paddingBottom = "3px";
   attackBtn.onPointerClickObservable.add(() => {
-    console.log(`Attack button clicked: currentUnit=${currentUnit?.type}, isAnimating=${isAnimatingMovement}, actionsRemaining=${turnState?.actionsRemaining}`);
     if (currentUnit && !isAnimatingMovement) {
       currentActionMode = "attack";
       selectedUnit = currentUnit;
@@ -2362,7 +2176,6 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
       const effectiveX = shadowPosition?.x ?? currentUnit.gridX;
       const effectiveZ = shadowPosition?.z ?? currentUnit.gridZ;
       highlightAttackTargets(currentUnit, effectiveX, effectiveZ);
-      console.log(`Attack mode set, attackableUnits found: ${attackableUnits.length}`);
     }
   });
   actionButtonsStack.addControl(attackBtn);
