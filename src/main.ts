@@ -37,6 +37,11 @@ export function navigateTo(sceneName: SceneName): void {
   }
 }
 
+// Helper to switch back to loadout from battle
+export function switchToLoadout(): void {
+  navigateTo("loadout");
+}
+
 // Start with click-to-start screen
 navigateTo("start");
 

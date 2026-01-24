@@ -141,10 +141,24 @@ export function createTitleScene(
       ember.element.shadowBlur = ember.size * 3;
     }
 
-    // Subtle title glow pulse
-    const glowIntensity = 0.6 + 0.2 * Math.sin(time * 0.5);
-    titleLine1.shadowColor = `rgba(255, 100, 20, ${glowIntensity * 0.5})`;
-    titleLine2.shadowColor = `rgba(255, 80, 0, ${glowIntensity * 0.7})`;
+    // Fade-in animation
+    if (fadeInStarted && fadeInAlpha < 1) {
+      fadeInAlpha = Math.min(1, fadeInAlpha + engine.getDeltaTime() / 1000 / fadeInDuration);
+      const ease = fadeInAlpha * fadeInAlpha * (3 - 2 * fadeInAlpha); // Smoothstep
+
+      // Update title colors with fade
+      titleLine1.color = `rgba(232, 196, 160, ${ease})`;
+      titleLine2.color = `rgba(255, 179, 102, ${ease})`;
+      divider.background = `rgba(255, 150, 80, ${ease * 0.4})`;
+      playButton.alpha = ease;
+    }
+
+    // Subtle title glow pulse (only after fade-in started)
+    if (fadeInAlpha > 0) {
+      const glowIntensity = 0.6 + 0.2 * Math.sin(time * 0.5);
+      titleLine1.shadowColor = `rgba(255, 100, 20, ${glowIntensity * 0.5 * fadeInAlpha})`;
+      titleLine2.shadowColor = `rgba(255, 80, 0, ${glowIntensity * 0.7 * fadeInAlpha})`;
+    }
   });
 
   // === TITLE TEXT ===
@@ -154,15 +168,21 @@ export function createTitleScene(
   panel.top = "-5%";
   gui.addControl(panel);
 
+  // Fade-in state
+  let fadeInStarted = false;
+  let fadeInAlpha = 0;
+  const fadeInDuration = 1.5; // seconds
+  const fadeInDelay = 0.3; // seconds before fade starts
+
   // Main title - Bebas Neue for that industrial T2 feel
   const titleLine1 = new TextBlock();
   titleLine1.text = "T H E   S U N S E T   G A M B I T";
-  titleLine1.color = "#e8c4a0"; // Warm off-white, like heated metal
+  titleLine1.color = "rgba(232, 196, 160, 0)"; // Start invisible
   titleLine1.fontFamily = "'Bebas Neue', 'Arial Black', sans-serif";
   titleLine1.fontWeight = "400";
   titleLine1.fontSize = 36;
   titleLine1.height = "55px";
-  titleLine1.shadowColor = "rgba(255, 100, 20, 0.5)";
+  titleLine1.shadowColor = "rgba(255, 100, 20, 0)";
   titleLine1.shadowBlur = 20;
   titleLine1.shadowOffsetY = 2;
   panel.addControl(titleLine1);
@@ -170,12 +190,12 @@ export function createTitleScene(
   // Subtitle - larger, more dramatic
   const titleLine2 = new TextBlock();
   titleLine2.text = "C R U C I B L E";
-  titleLine2.color = "#ffb366"; // Warmer, more orange - like glowing metal
+  titleLine2.color = "rgba(255, 179, 102, 0)"; // Start invisible
   titleLine2.fontFamily = "'Bebas Neue', 'Arial Black', sans-serif";
   titleLine2.fontWeight = "400";
   titleLine2.fontSize = 96;
   titleLine2.height = "120px";
-  titleLine2.shadowColor = "rgba(255, 80, 0, 0.7)";
+  titleLine2.shadowColor = "rgba(255, 80, 0, 0)";
   titleLine2.shadowBlur = 30;
   titleLine2.shadowOffsetY = 4;
   panel.addControl(titleLine2);
@@ -185,7 +205,7 @@ export function createTitleScene(
   divider.width = "300px";
   divider.height = "2px";
   divider.thickness = 0;
-  divider.background = "rgba(255, 150, 80, 0.4)";
+  divider.background = "rgba(255, 150, 80, 0)"; // Start invisible
   panel.addControl(divider);
 
   // Spacer
@@ -193,6 +213,15 @@ export function createTitleScene(
   spacer.height = "60px";
   spacer.text = "";
   panel.addControl(spacer);
+
+  // Start fade-in after fonts load
+  document.fonts.load("36px 'Bebas Neue'").then(() => {
+    document.fonts.load("96px 'Bebas Neue'").then(() => {
+      setTimeout(() => {
+        fadeInStarted = true;
+      }, fadeInDelay * 1000);
+    });
+  });
 
   // === PLAY BUTTON - minimal, understated ===
   const playButton = new Rectangle();
@@ -203,6 +232,7 @@ export function createTitleScene(
   playButton.thickness = 1;
   playButton.color = "#b89070";
   playButton.hoverCursor = "pointer";
+  playButton.alpha = 0; // Start invisible, fade in with title
 
   const buttonText = new TextBlock();
   buttonText.text = "B E G I N";

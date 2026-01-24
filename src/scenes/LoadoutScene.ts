@@ -23,7 +23,7 @@ import {
   Control,
   Image,
 } from "@babylonjs/gui";
-import { UNIT_INFO, Loadout, UnitSelection, SupportCustomization, UnitType } from "../types";
+import { ALL_CLASSES, getClassData, Loadout, UnitSelection, UnitCustomization, UnitClass } from "../types";
 
 // Color palette options
 const SKIN_TONES = [
@@ -131,10 +131,10 @@ export function createLoadoutScene(
 
   // Track selections
   const selections: Loadout = {
-    player: [],
-    enemy: [],
-    playerTeamColor: TEAM_COLORS[2].hex,  // Default blue
-    enemyTeamColor: TEAM_COLORS[0].hex,   // Default red
+    player1: [],
+    player2: [],
+    player1TeamColor: TEAM_COLORS[2].hex,  // Default blue
+    player2TeamColor: TEAM_COLORS[0].hex,   // Default red
   };
 
   // Track team color UI refresh callbacks
@@ -177,17 +177,15 @@ export function createLoadoutScene(
     return new Color3(r, g, b);
   }
 
-  function updatePreview(preview: UnitPreview | undefined, c: SupportCustomization, classType: UnitType | null): void {
-    if (!preview || !classType) return;
+  function updatePreview(preview: UnitPreview | undefined, c: UnitCustomization, unitClass: UnitClass | null): void {
+    if (!preview || !unitClass) return;
 
-    // Determine which class models to use
-    const classKey = classType === "tank" ? "soldier" : classType === "damage" ? "operator" : "medic";
-    const classModels = preview[classKey];
+    // Get models for the selected class
+    const classModels = preview[unitClass];
 
     // Hide all models from other classes
-    const allClasses: Array<"soldier" | "operator" | "medic"> = ["soldier", "operator", "medic"];
-    for (const key of allClasses) {
-      if (key !== classKey) {
+    for (const key of ALL_CLASSES) {
+      if (key !== unitClass) {
         preview[key].male.root.setEnabled(false);
         preview[key].female.root.setEnabled(false);
         preview[key].male.animationGroups.forEach(ag => ag.stop());
@@ -298,8 +296,8 @@ export function createLoadoutScene(
 
     // Team color - use selected color or default
     const teamColorHex = side === "left"
-      ? (selections.playerTeamColor || TEAM_COLORS[2].hex)
-      : (selections.enemyTeamColor || TEAM_COLORS[0].hex);
+      ? (selections.player1TeamColor || TEAM_COLORS[2].hex)
+      : (selections.player2TeamColor || TEAM_COLORS[0].hex);
     const teamColor = hexToColor3(teamColorHex);
 
     // Helper to set up a model
@@ -428,8 +426,8 @@ export function createLoadoutScene(
   }
 
   // Create player panels
-  const player1Panel = createPlayerPanel("Player 1", "#4488ff", selections.player, "left");
-  const player2Panel = createPlayerPanel("Player 2", "#ff8844", selections.enemy, "right");
+  const player1Panel = createPlayerPanel("Player 1", "#4488ff", selections.player1, "left");
+  const player2Panel = createPlayerPanel("Player 2", "#ff8844", selections.player2, "right");
 
   mainGrid.addControl(player1Panel, 0, 0);
   mainGrid.addControl(player2Panel, 0, 1);
@@ -461,14 +459,14 @@ export function createLoadoutScene(
   startBtn.isEnabled = false;
   startBtn.alpha = 0.5;
   startBtn.onPointerClickObservable.add(() => {
-    if (selections.player.length === 3 && selections.enemy.length === 3) {
+    if (selections.player1.length === 3 && selections.player2.length === 3) {
       onStartBattle(selections);
     }
   });
   gui.addControl(startBtn);
 
   function updateStartButton(): void {
-    const ready = selections.player.length === 3 && selections.enemy.length === 3;
+    const ready = selections.player1.length === 3 && selections.player2.length === 3;
     startBtn.isEnabled = ready;
     startBtn.alpha = ready ? 1 : 0.5;
     startBtn.background = ready ? "#448844" : "#444444";
@@ -536,21 +534,21 @@ export function createLoadoutScene(
 
     // Function to get the other player's selected color
     const getOtherPlayerColor = (): string | undefined => {
-      return isPlayerSide ? selections.enemyTeamColor : selections.playerTeamColor;
+      return isPlayerSide ? selections.player2TeamColor : selections.player1TeamColor;
     };
 
     // Function to update this player's team color
     const setTeamColor = (hexColor: string): void => {
       if (isPlayerSide) {
-        selections.playerTeamColor = hexColor;
+        selections.player1TeamColor = hexColor;
       } else {
-        selections.enemyTeamColor = hexColor;
+        selections.player2TeamColor = hexColor;
       }
     };
 
     // Function to get this player's current color
     const getTeamColor = (): string | undefined => {
-      return isPlayerSide ? selections.playerTeamColor : selections.enemyTeamColor;
+      return isPlayerSide ? selections.player1TeamColor : selections.player2TeamColor;
     };
 
     // Create color swatches
@@ -635,11 +633,12 @@ export function createLoadoutScene(
       });
     };
 
-    // Row 2: Selection display + Clear button
+    // Row 2: Selection display + Clear button + Randomize button
     const selectionRow = new Grid();
     selectionRow.width = "100%";
     selectionRow.addColumnDefinition(1);        // Selection text - fill
-    selectionRow.addColumnDefinition(70, true); // Clear button - fixed width
+    selectionRow.addColumnDefinition(55, true); // Clear button - fixed width
+    selectionRow.addColumnDefinition(70, true); // Randomize button - fixed width
     selectionRow.addRowDefinition(1);
     container.addControl(selectionRow, 2, 0);
 
@@ -667,12 +666,64 @@ export function createLoadoutScene(
     });
     selectionRow.addControl(clearBtn, 0, 1);
 
+    // Randomize button - generates 3 random units
+    const randomizeBtn = Button.CreateSimpleButton(`${playerName}_random`, "Random");
+    randomizeBtn.width = "100%";
+    randomizeBtn.height = "22px";
+    randomizeBtn.color = "#66aaff";
+    randomizeBtn.background = "#224466";
+    randomizeBtn.cornerRadius = 3;
+    randomizeBtn.fontSize = 11;
+    randomizeBtn.onPointerClickObservable.add(() => {
+      // Show loading state
+      if (randomizeBtn.textBlock) {
+        randomizeBtn.textBlock.text = "...";
+      }
+      randomizeBtn.background = "#335577";
+
+      // Use setTimeout to allow UI to update before processing
+      setTimeout(() => {
+        // Clear existing selections
+        selectionArray.length = 0;
+
+        // Generate 3 random units
+        for (let i = 0; i < 3; i++) {
+          const randomClass = ALL_CLASSES[Math.floor(Math.random() * ALL_CLASSES.length)];
+          const randomCustomization: UnitCustomization = {
+            body: Math.random() > 0.5 ? "male" : "female",
+            combatStyle: Math.random() > 0.5 ? "ranged" : "melee",
+            handedness: Math.random() > 0.5 ? "right" : "left",
+            head: Math.floor(Math.random() * 4),
+            hairColor: Math.floor(Math.random() * HAIR_COLORS.length),
+            eyeColor: Math.floor(Math.random() * EYE_COLORS.length),
+            skinTone: Math.floor(Math.random() * SKIN_TONES.length),
+          };
+          selectionArray.push({
+            unitClass: randomClass,
+            customization: randomCustomization,
+          });
+        }
+
+        updateSelectionDisplay();
+        updateStartButton();
+        customPanel.isVisible = false;
+        selectedClass = null;
+
+        // Restore button
+        if (randomizeBtn.textBlock) {
+          randomizeBtn.textBlock.text = "Random";
+        }
+        randomizeBtn.background = "#224466";
+      }, 50);
+    });
+    selectionRow.addControl(randomizeBtn, 0, 2);
+
     const updateSelectionDisplay = (): void => {
       if (selectionArray.length === 0) {
         selectionDisplay.text = "Selected: (choose 3)";
         selectionDisplay.color = "#ff6666";
       } else {
-        const names = selectionArray.map(u => UNIT_INFO[u.type].name);
+        const names = selectionArray.map(u => getClassData(u.unitClass).name);
         selectionDisplay.text = `Selected: ${names.join(", ")}`;
         selectionDisplay.color = selectionArray.length === 3 ? "#44ff44" : "#ff6666";
       }
@@ -688,10 +739,10 @@ export function createLoadoutScene(
     container.addControl(classButtonRow, 3, 0);
 
     // Track which class is currently selected for customization
-    let selectedClass: UnitType | null = null;
+    let selectedClass: UnitClass | null = null;
 
     // Current customization state
-    const currentCustomization: SupportCustomization = {
+    const currentCustomization: UnitCustomization = {
       body: "male",
       combatStyle: "ranged",
       handedness: "right",
@@ -835,21 +886,21 @@ export function createLoadoutScene(
       let ability = "";
       let weapon = "";
 
-      if (selectedClass === "tank") {
+      if (selectedClass === "soldier") {
         fluff = `Soldiers are the backbone of settlement defense. Drawn from Earth's militaries and security forces, they volunteered to protect humanity's last hope. Where others see danger, ${pronoun} sees a perimeter to hold.`;
-        ability = `[COVER]\nWhen activated, if an enemy ends their move within attack range, the Soldier strikes first with a devastating counter attack.`;
-      } else if (selectedClass === "damage") {
+        ability = `[COVER]\nWhen activated, enemies that finish any action in a covered square are counter attacked, interrupting their remaining actions. Concealed enemies do not trigger Cover. Cover ends after a counter attack or if this unit is hit.`;
+      } else if (selectedClass === "operator") {
         fluff = `Operators work beyond the settlement walls where survival demands cunning over strength. Whether scouting hostile terrain or eliminating threats before they reach the settlement, ${pronoun} is the unseen blade that keeps the settlement safe.`;
-        ability = `[CONCEAL]\nWhen activated, the next incoming hit is completely negated, allowing ${pronounObj} to survive otherwise fatal encounters.`;
-      } else if (selectedClass === "support") {
+        ability = `[CONCEAL]\nWhen activated, the next incoming hit is completely negated, and ${pronoun} won't trigger enemy Cover. Allows ${pronounObj} to survive otherwise fatal encounters or slip past defended positions.`;
+      } else if (selectedClass === "medic") {
         fluff = `In a settlement where every life is precious, Medics are revered. Trained in both trauma care and combat medicine, ${pronoun} keeps the team fighting when the odds turn grim.`;
         ability = `[HEAL]\nSelect self or an ally to restore HP. The difference between victory and defeat often comes down to keeping the right person standing.`;
       }
 
       if (isMelee) {
-        weapon = `[MELEE]\nAttacks and counter attacks in ordinal directions, one space away within line of sight. Best for holding chokepoints.`;
+        weapon = `[MELEE]\nDeals 2x damage. Attacks in ordinal directions, one space away within line of sight. Best for holding chokepoints.`;
       } else {
-        weapon = `[RANGED]\nAttacks and counter attacks anywhere within line of sight, except adjacent ordinal spaces. Optimal for controlling the battlefield from a distance.`;
+        weapon = `[RANGED]\nAttacks anywhere within line of sight, except adjacent ordinal spaces. Optimal for controlling the battlefield from a distance.`;
       }
 
       descriptionText.text = `${fluff}\n\n${ability}\n\n${weapon}`;
@@ -980,8 +1031,8 @@ export function createLoadoutScene(
     addBtn.onPointerClickObservable.add(() => {
       if (selectionArray.length < 3 && selectedClass) {
         selectionArray.push({
-          type: selectedClass,
-          customization: selectedClass === "support" ? { ...currentCustomization } : undefined
+          unitClass: selectedClass,
+          customization: { ...currentCustomization }
         });
         updateSelectionDisplay();
         updateStartButton();
@@ -993,13 +1044,13 @@ export function createLoadoutScene(
     rightCol.addControl(addBtn, 1, 0);
 
     // Function to open customization for a class
-    const openCustomization = (classType: UnitType): void => {
-      selectedClass = classType;
-      const info = UNIT_INFO[classType];
-      classTitle.text = info.name.toUpperCase();
+    const openCustomization = (unitClass: UnitClass): void => {
+      selectedClass = unitClass;
+      const classData = getClassData(unitClass);
+      classTitle.text = classData.name.toUpperCase();
       // Update button text through textBlock property
       const btnText = addBtn.textBlock;
-      if (btnText) btnText.text = `+ Add ${info.name}`;
+      if (btnText) btnText.text = `+ Add ${classData.name}`;
       customPanel.isVisible = true;
       updateDescription();
       // Show the correct model for the selected class
@@ -1007,11 +1058,11 @@ export function createLoadoutScene(
     };
 
     // Create class buttons
-    const classTypes: UnitType[] = ["tank", "damage", "support"];
     const classButtons: Button[] = [];
 
-    classTypes.forEach((classType, index) => {
-      const btn = Button.CreateSimpleButton(`${playerName}_${classType}`, UNIT_INFO[classType].name);
+    ALL_CLASSES.forEach((unitClass, index) => {
+      const classData = getClassData(unitClass);
+      const btn = Button.CreateSimpleButton(`${playerName}_${unitClass}`, classData.name);
       btn.width = "95%";
       btn.height = "35px";
       btn.color = "white";
@@ -1019,8 +1070,7 @@ export function createLoadoutScene(
       btn.cornerRadius = 5;
       btn.fontSize = 13;
       btn.onPointerEnterObservable.add(() => {
-        const info = UNIT_INFO[classType];
-        infoText.text = `${info.name}: HP ${info.hp} | ATK ${info.attack} | Move ${info.moveRange} | Range ${info.attackRange}`;
+        infoText.text = `${classData.name}: HP ${classData.hp} | ATK ${classData.attack} | Move ${classData.moveRange} | Range ${classData.attackRange}`;
         infoText.color = "white";
       });
       btn.onPointerOutObservable.add(() => {
@@ -1029,7 +1079,7 @@ export function createLoadoutScene(
       });
       btn.onPointerClickObservable.add(() => {
         if (selectionArray.length < 3) {
-          openCustomization(classType);
+          openCustomization(unitClass);
         }
       });
       classButtons.push(btn);

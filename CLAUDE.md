@@ -53,6 +53,24 @@ When implementing features:
 
 ## Conversation Log
 
+### 2026-01-24
+- Major BattleScene refactor: animations, LOS, command menu, and abilities
+  - **Facing system**: Units face average enemy position on spawn; rotate to face targets before moving/attacking
+  - **Animation helpers**: `playAnimation()` and `playIdleAnimation()` for managing animation groups
+  - **Animated movement**: Units play Run animation during movement with smooth position lerping
+  - **Line of sight system**: Bresenham's line algorithm for LOS checking between tiles
+  - **Weapon range rules**:
+    - Sword (melee): Can only hit adjacent ordinal tiles (N/S/E/W), always has LOS
+    - Gun (ranged): Can hit any tile in LOS, but NOT adjacent tiles
+  - **Command menu UI**: Bottom-left panel with Move/Attack/Ability buttons, actions counter, and status preview
+  - **Shadow preview system**: Shows ghost of unit at target position when hovering valid move tiles, plus attack preview from shadow position
+  - **2-action turn system**: Each unit gets 2 actions per turn (any combination of move/attack/ability); replaced legacy hasMoved/hasAttacked booleans
+  - **Abilities**:
+    - Heal (Medic): Highlights healable allies, restores HP, plays Interact animation
+    - Conceal (Operator): Toggle semi-transparency; when hit while concealed, damage is negated and conceal breaks
+    - Cover (Soldier): Toggle coverage; sword users cover 4 adjacent tiles, gun users cover all LOS tiles (not adjacent); pulsing border visualization
+  - **Turn summary**: Preview section shows current status (CONCEALED/COVERING) and available actions
+
 ### 2026-01-23
 - Wired up loadout models to BattleScene
   - Units now spawn as 3D models (soldier/operator/medic) instead of placeholder boxes
