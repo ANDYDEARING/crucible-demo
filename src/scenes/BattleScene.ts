@@ -558,11 +558,9 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
         movedZ = true;
       }
 
-      // Skip checking the destination tile
-      if (x === toX && z === toZ) break;
-
       // If moving diagonally, check both adjacent tiles to prevent corner-cutting
       // A diagonal move from (prevX,prevZ) to (x,z) passes between (x,prevZ) and (prevX,z)
+      // This check must happen BEFORE the destination break to catch diagonal shots to adjacent tiles
       if (movedX && movedZ) {
         // Check if both corner tiles are blocked (can't see through diagonal gap)
         const corner1Blocked = hasTerrain(x, prevZ) || units.some(u => u.gridX === x && u.gridZ === prevZ && u.hp > 0 && u !== excludeUnit);
@@ -571,6 +569,9 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
           return false;
         }
       }
+
+      // Skip checking the destination tile (but corner check above still applies)
+      if (x === toX && z === toZ) break;
 
       // Check if terrain blocks LOS
       if (hasTerrain(x, z)) {
@@ -1189,6 +1190,12 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
     unit.hasMoved = false;
     unit.hasAttacked = false;
 
+    // Cancel Cover at the start of this unit's turn
+    if (unit.isCovering) {
+      console.log(`${unit.team} ${unit.unitClass}'s Cover ends at start of turn.`);
+      endCover(unit);
+    }
+
     // Reset accumulator after acting
     unit.accumulator = 0;
 
@@ -1469,14 +1476,6 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
     currentTile.material = selectedMaterial;
     highlightedTiles.push(currentTile);
 
-    // Highlight attackable enemies (from effective position)
-    attackableUnits = getAttackableEnemies(unit, effectiveX, effectiveZ);
-    for (const player2 of attackableUnits) {
-      const tile = tiles[player2.gridX][player2.gridZ];
-      tile.material = attackableMaterial;
-      highlightedTiles.push(tile);
-    }
-
     // Highlight healable allies (support only, from effective position)
     healableUnits = getHealableAllies(unit, effectiveX, effectiveZ);
     for (const ally of healableUnits) {
@@ -1620,15 +1619,15 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
 
   // Toggle Conceal for Operator (damage type)
   function toggleConceal(unit: Unit): void {
-    unit.isConcealed = !unit.isConcealed;
-
+    // Always turn conceal ON (never toggle off)
     if (unit.isConcealed) {
-      applyConcealVisual(unit);
-      console.log(`${unit.team} ${unit.unitClass} activates Conceal!`);
-    } else {
-      removeConcealVisual(unit);
-      console.log(`${unit.team} ${unit.unitClass} deactivates Conceal.`);
+      console.log(`${unit.team} ${unit.unitClass} is already Concealed.`);
+      return;
     }
+
+    unit.isConcealed = true;
+    applyConcealVisual(unit);
+    console.log(`${unit.team} ${unit.unitClass} activates Conceal!`);
 
     // Play interact animation
     if (unit.modelMeshes) {
@@ -1755,13 +1754,13 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
     // Create materials for both colors
     const mat1 = new StandardMaterial(`dualMat1_${tileX}_${tileZ}`, scene);
     mat1.diffuseColor = color1;
-    mat1.emissiveColor = color1.scale(0.7);
-    mat1.alpha = 1.0;
+    mat1.emissiveColor = color1.scale(0.4);
+    mat1.alpha = 0.4;
 
     const mat2 = new StandardMaterial(`dualMat2_${tileX}_${tileZ}`, scene);
     mat2.diffuseColor = color2;
-    mat2.emissiveColor = color2.scale(0.7);
-    mat2.alpha = 1.0;
+    mat2.emissiveColor = color2.scale(0.4);
+    mat2.alpha = 0.4;
 
     // Create corner markers - alternating colors at each corner
     // Each corner has an L-shape made of two boxes
@@ -1894,8 +1893,8 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
 
     const cornerMat = new StandardMaterial(`coverPreviewMat_${tileX}_${tileZ}`, scene);
     cornerMat.diffuseColor = color;
-    cornerMat.emissiveColor = color.scale(0.3);
-    cornerMat.alpha = 0.5;  // More transparent for preview
+    cornerMat.emissiveColor = color.scale(0.2);
+    cornerMat.alpha = 0.2;  // More transparent for preview
 
     // Create L-shaped corner markers at each corner
     const corners = [
@@ -2030,8 +2029,8 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
 
     const cornerMat = new StandardMaterial(`coverCornerMat_${unit.team}_${tileX}_${tileZ}`, scene);
     cornerMat.diffuseColor = color;
-    cornerMat.emissiveColor = color.scale(0.7);
-    cornerMat.alpha = 1.0;
+    cornerMat.emissiveColor = color.scale(0.4);
+    cornerMat.alpha = 0.4;
 
     // Get or create mesh array for this unit
     if (!coverMeshesByUnit.has(unit)) {
@@ -2378,6 +2377,12 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
   function queueConcealAction(unit: Unit): void {
     if (!turnState) return;
 
+    // Don't allow queuing if already concealed
+    if (unit.isConcealed) {
+      console.log(`${unit.team} ${unit.unitClass} is already Concealed.`);
+      return;
+    }
+
     // Add to pending actions
     turnState.pendingActions.push({
       type: "ability",
@@ -2561,10 +2566,8 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
         defender.isConcealed = false;
         removeConcealVisual(defender);
         console.log(`${defender.team} ${defender.unitClass}'s Conceal was broken! Damage negated!`);
-        // Hit sounds based on weapon type
-        const isMeleeAttack = attacker.customization?.combatStyle === "melee";
-        if (isMeleeAttack) playSfx(sfx.hitHeavy);
-        else playSfx(sfx.hitMedium);
+        // Light hit sound for conceal break
+        playSfx(sfx.hitLight);
 
         playAnimation(defender, "HitRecieve", false, () => {
           playIdleAnimation(defender);
@@ -2653,15 +2656,16 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
 
   // Execute conceal ability (called during execution phase)
   function executeConceal(unit: Unit, onComplete: () => void): void {
-    unit.isConcealed = !unit.isConcealed;
-
+    // Always turn conceal ON (never toggle off)
     if (unit.isConcealed) {
-      applyConcealVisual(unit);
-      console.log(`${unit.team} ${unit.unitClass} activates Conceal!`);
-    } else {
-      removeConcealVisual(unit);
-      console.log(`${unit.team} ${unit.unitClass} deactivates Conceal.`);
+      console.log(`${unit.team} ${unit.unitClass} is already Concealed.`);
+      onComplete();
+      return;
     }
+
+    unit.isConcealed = true;
+    applyConcealVisual(unit);
+    console.log(`${unit.team} ${unit.unitClass} activates Conceal!`);
 
     // Play interact animation
     if (unit.modelMeshes) {

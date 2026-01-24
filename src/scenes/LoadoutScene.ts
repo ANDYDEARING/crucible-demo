@@ -888,7 +888,7 @@ export function createLoadoutScene(
 
       if (selectedClass === "soldier") {
         fluff = `Soldiers are the backbone of settlement defense. Drawn from Earth's militaries and security forces, they volunteered to protect humanity's last hope. Where others see danger, ${pronoun} sees a perimeter to hold.`;
-        ability = `[COVER]\nWhen activated, enemies that finish any action in a covered square are counter attacked, interrupting their remaining actions. Concealed enemies do not trigger Cover. Cover ends after a counter attack or if this unit is hit.`;
+        ability = `[COVER]\nWhen activated, enemies that finish any action in a covered square are counter attacked, interrupting their remaining actions. Concealed enemies do not trigger Cover. Cover ends at the start of this unit's next turn, after a counter attack, or if this unit is hit.`;
       } else if (selectedClass === "operator") {
         fluff = `Operators work beyond the settlement walls where survival demands cunning over strength. Whether scouting hostile terrain or eliminating threats before they reach the settlement, ${pronoun} is the unseen blade that keeps the settlement safe.`;
         ability = `[CONCEAL]\nWhen activated, the next incoming hit is completely negated, and ${pronoun} won't trigger enemy Cover. Allows ${pronounObj} to survive otherwise fatal encounters or slip past defended positions.`;
