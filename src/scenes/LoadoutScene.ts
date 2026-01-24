@@ -131,10 +131,10 @@ export function createLoadoutScene(
 
   // Track selections
   const selections: Loadout = {
-    player: [],
-    enemy: [],
-    playerTeamColor: TEAM_COLORS[2].hex,  // Default blue
-    enemyTeamColor: TEAM_COLORS[0].hex,   // Default red
+    player1: [],
+    player2: [],
+    player1TeamColor: TEAM_COLORS[2].hex,  // Default blue
+    player2TeamColor: TEAM_COLORS[0].hex,   // Default red
   };
 
   // Track team color UI refresh callbacks
@@ -298,8 +298,8 @@ export function createLoadoutScene(
 
     // Team color - use selected color or default
     const teamColorHex = side === "left"
-      ? (selections.playerTeamColor || TEAM_COLORS[2].hex)
-      : (selections.enemyTeamColor || TEAM_COLORS[0].hex);
+      ? (selections.player1TeamColor || TEAM_COLORS[2].hex)
+      : (selections.player2TeamColor || TEAM_COLORS[0].hex);
     const teamColor = hexToColor3(teamColorHex);
 
     // Helper to set up a model
@@ -428,8 +428,8 @@ export function createLoadoutScene(
   }
 
   // Create player panels
-  const player1Panel = createPlayerPanel("Player 1", "#4488ff", selections.player, "left");
-  const player2Panel = createPlayerPanel("Player 2", "#ff8844", selections.enemy, "right");
+  const player1Panel = createPlayerPanel("Player 1", "#4488ff", selections.player1, "left");
+  const player2Panel = createPlayerPanel("Player 2", "#ff8844", selections.player2, "right");
 
   mainGrid.addControl(player1Panel, 0, 0);
   mainGrid.addControl(player2Panel, 0, 1);
@@ -461,14 +461,14 @@ export function createLoadoutScene(
   startBtn.isEnabled = false;
   startBtn.alpha = 0.5;
   startBtn.onPointerClickObservable.add(() => {
-    if (selections.player.length === 3 && selections.enemy.length === 3) {
+    if (selections.player1.length === 3 && selections.player2.length === 3) {
       onStartBattle(selections);
     }
   });
   gui.addControl(startBtn);
 
   function updateStartButton(): void {
-    const ready = selections.player.length === 3 && selections.enemy.length === 3;
+    const ready = selections.player1.length === 3 && selections.player2.length === 3;
     startBtn.isEnabled = ready;
     startBtn.alpha = ready ? 1 : 0.5;
     startBtn.background = ready ? "#448844" : "#444444";
@@ -536,21 +536,21 @@ export function createLoadoutScene(
 
     // Function to get the other player's selected color
     const getOtherPlayerColor = (): string | undefined => {
-      return isPlayerSide ? selections.enemyTeamColor : selections.playerTeamColor;
+      return isPlayerSide ? selections.player2TeamColor : selections.player1TeamColor;
     };
 
     // Function to update this player's team color
     const setTeamColor = (hexColor: string): void => {
       if (isPlayerSide) {
-        selections.playerTeamColor = hexColor;
+        selections.player1TeamColor = hexColor;
       } else {
-        selections.enemyTeamColor = hexColor;
+        selections.player2TeamColor = hexColor;
       }
     };
 
     // Function to get this player's current color
     const getTeamColor = (): string | undefined => {
-      return isPlayerSide ? selections.playerTeamColor : selections.enemyTeamColor;
+      return isPlayerSide ? selections.player1TeamColor : selections.player2TeamColor;
     };
 
     // Create color swatches
@@ -677,32 +677,47 @@ export function createLoadoutScene(
     randomizeBtn.cornerRadius = 3;
     randomizeBtn.fontSize = 11;
     randomizeBtn.onPointerClickObservable.add(() => {
-      // Clear existing selections
-      selectionArray.length = 0;
-
-      // Generate 3 random units
-      const unitTypes: UnitType[] = ["tank", "damage", "support"];
-      for (let i = 0; i < 3; i++) {
-        const randomType = unitTypes[Math.floor(Math.random() * unitTypes.length)];
-        const randomCustomization: SupportCustomization = {
-          body: Math.random() > 0.5 ? "male" : "female",
-          combatStyle: Math.random() > 0.5 ? "ranged" : "melee",
-          handedness: Math.random() > 0.5 ? "right" : "left",
-          head: Math.floor(Math.random() * 4),
-          hairColor: Math.floor(Math.random() * HAIR_COLORS.length),
-          eyeColor: Math.floor(Math.random() * EYE_COLORS.length),
-          skinTone: Math.floor(Math.random() * SKIN_TONES.length),
-        };
-        selectionArray.push({
-          type: randomType,
-          customization: randomCustomization,
-        });
+      // Show loading state
+      if (randomizeBtn.textBlock) {
+        randomizeBtn.textBlock.text = "...";
       }
+      randomizeBtn.background = "#335577";
 
-      updateSelectionDisplay();
-      updateStartButton();
-      customPanel.isVisible = false;
-      selectedClass = null;
+      // Use setTimeout to allow UI to update before processing
+      setTimeout(() => {
+        // Clear existing selections
+        selectionArray.length = 0;
+
+        // Generate 3 random units
+        const unitTypes: UnitType[] = ["tank", "damage", "support"];
+        for (let i = 0; i < 3; i++) {
+          const randomType = unitTypes[Math.floor(Math.random() * unitTypes.length)];
+          const randomCustomization: SupportCustomization = {
+            body: Math.random() > 0.5 ? "male" : "female",
+            combatStyle: Math.random() > 0.5 ? "ranged" : "melee",
+            handedness: Math.random() > 0.5 ? "right" : "left",
+            head: Math.floor(Math.random() * 4),
+            hairColor: Math.floor(Math.random() * HAIR_COLORS.length),
+            eyeColor: Math.floor(Math.random() * EYE_COLORS.length),
+            skinTone: Math.floor(Math.random() * SKIN_TONES.length),
+          };
+          selectionArray.push({
+            type: randomType,
+            customization: randomCustomization,
+          });
+        }
+
+        updateSelectionDisplay();
+        updateStartButton();
+        customPanel.isVisible = false;
+        selectedClass = null;
+
+        // Restore button
+        if (randomizeBtn.textBlock) {
+          randomizeBtn.textBlock.text = "Random";
+        }
+        randomizeBtn.background = "#224466";
+      }, 50);
     });
     selectionRow.addControl(randomizeBtn, 0, 2);
 

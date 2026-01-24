@@ -51,7 +51,7 @@ const UNIT_STATS = {
   support: { hp: 60, attack: 10, moveRange: 3, attackRange: 3, healAmount: 25 },
 };
 
-type Team = "player" | "enemy";
+type Team = "player1" | "player2";
 type ActionMode = "none" | "move" | "attack" | "ability";
 
 // Pending action for preview system
@@ -70,6 +70,13 @@ interface TurnState {
   pendingActions: PendingAction[];
   originalPosition: { x: number; z: number };
   originalFacing: number;
+}
+
+// Facing configuration for a unit's model
+interface FacingConfig {
+  currentAngle: number;      // Current facing angle in radians
+  baseOffset: number;        // Model's base rotation offset (model-specific)
+  isFlipped: boolean;        // Whether model has negative X scale (right-handed)
 }
 
 interface Unit {
@@ -101,8 +108,8 @@ interface Unit {
   animationGroups?: AnimationGroup[];
   customization?: SupportCustomization;
   teamColor: Color3;
-  // Facing (radians, 0 = +Z direction)
-  facing: number;
+  // Facing system
+  facing: FacingConfig;
   // Ability states
   isConcealed: boolean;
   isCovering: boolean;
@@ -227,7 +234,12 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
   // ============================================
 
   function playAnimation(unit: Unit, animName: string, loop: boolean, onComplete?: () => void): void {
-    if (!unit.animationGroups) return;
+    if (!unit.animationGroups) {
+      // No animation groups - call onComplete immediately
+      console.warn(`No animation groups for ${unit.type}`);
+      if (onComplete) onComplete();
+      return;
+    }
 
     // Stop all current animations
     unit.animationGroups.forEach(ag => ag.stop());
@@ -235,12 +247,18 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
     // Find and play the requested animation
     const anim = unit.animationGroups.find(ag => ag.name === animName);
     if (anim) {
+      console.log(`Playing animation "${animName}" for ${unit.team} ${unit.type}`);
       anim.start(loop);
       if (onComplete && !loop) {
         anim.onAnimationEndObservable.addOnce(() => {
+          console.log(`Animation "${animName}" completed for ${unit.team} ${unit.type}`);
           onComplete();
         });
       }
+    } else {
+      // Animation not found - call onComplete immediately so game doesn't hang
+      console.warn(`Animation "${animName}" not found for ${unit.type}. Available: ${unit.animationGroups.map(ag => ag.name).join(", ")}`);
+      if (onComplete) onComplete();
     }
   }
 
@@ -250,33 +268,153 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
   }
 
   // ============================================
-  // FACING SYSTEM
+  // FACING SYSTEM (Encapsulated)
+  // ============================================
+  //
+  // Each unit has a FacingConfig that stores:
+  // - currentAngle: the world-space angle the unit should face
+  // - baseOffset: rotation offset for the model's default orientation
+  // - isFlipped: whether the model has negative X scale (right-handed)
+  //
+  // Key functions:
+  // - initFacing(unit): Initialize facing config based on customization
+  // - faceTarget(unit, x, z): Face a specific grid position
+  // - faceClosestEnemy(unit): Face the nearest enemy
+  // - applyFacing(unit): Apply the current facing angle to the model
+  //
+  // TESTING JIG: Press 'f' to log current facing debug info
   // ============================================
 
-  function setUnitFacing(unit: Unit, targetX: number, targetZ: number): void {
+  // Rotation offsets determined empirically for each model configuration
+  const FACING_OFFSET_NORMAL = 0;           // Non-flipped models (left-handed)
+  const FACING_OFFSET_FLIPPED = 0;          // Flipped models (right-handed) - just negate angle
+
+  // Testing jig state
+  let isInitialSetup = true;  // Skip debug during spawn
+  let facingDebugHighlight: Mesh | null = null;
+  let lastFacingDebugInfo: {
+    unit: Unit;
+    unitPos: { x: number; z: number };
+    targetPos: { x: number; z: number };
+    handedness: string;
+  } | null = null;
+
+  // Create/update the yellow highlight for facing target
+  function updateFacingDebugHighlight(targetX: number, targetZ: number): void {
+    if (isInitialSetup) return;  // Skip during initial spawn
+
+    // Remove old highlight
+    if (facingDebugHighlight) {
+      facingDebugHighlight.dispose();
+    }
+
+    // Create yellow highlight on target tile
+    facingDebugHighlight = MeshBuilder.CreateBox(
+      "facingDebugHighlight",
+      { width: TILE_SIZE - TILE_GAP + 0.1, height: 0.15, depth: TILE_SIZE - TILE_GAP + 0.1 },
+      scene
+    );
+    const highlightMat = new StandardMaterial("facingHighlightMat", scene);
+    highlightMat.diffuseColor = new Color3(1, 1, 0);  // Yellow
+    highlightMat.emissiveColor = new Color3(0.5, 0.5, 0);
+    highlightMat.alpha = 0.6;
+    facingDebugHighlight.material = highlightMat;
+    facingDebugHighlight.position = new Vector3(
+      targetX * TILE_SIZE - gridOffset,
+      0.08,
+      targetZ * TILE_SIZE - gridOffset
+    );
+  }
+
+  // Keyboard listener for facing debug
+  window.addEventListener("keydown", (e) => {
+    if (e.key === "f" || e.key === "F") {
+      if (lastFacingDebugInfo) {
+        const info = lastFacingDebugInfo;
+        console.log(`[FACING DEBUG] Unit: ${info.unit.team} ${info.unit.type}`);
+        console.log(`[FACING DEBUG] Handedness: ${info.handedness} (isFlipped: ${info.unit.facing.isFlipped})`);
+        console.log(`[FACING DEBUG] Unit position: (${info.unitPos.x}, ${info.unitPos.z})`);
+        console.log(`[FACING DEBUG] Target position (yellow tile): (${info.targetPos.x.toFixed(1)}, ${info.targetPos.z.toFixed(1)})`);
+        console.log(`[FACING DEBUG] Current angle: ${info.unit.facing.currentAngle.toFixed(3)} rad (${(info.unit.facing.currentAngle * 180 / Math.PI).toFixed(1)} deg)`);
+        console.log(`[FACING DEBUG] Base offset: ${info.unit.facing.baseOffset.toFixed(3)} rad`);
+        if (info.unit.modelRoot) {
+          console.log(`[FACING DEBUG] Applied rotation.y: ${info.unit.modelRoot.rotation.y.toFixed(3)} rad`);
+        }
+      } else {
+        console.log(`[FACING DEBUG] No facing data yet. Move a unit first.`);
+      }
+    }
+  });
+
+  // Initialize facing config for a unit
+  function initFacing(unit: Unit): void {
+    const isFlipped = unit.customization?.handedness === "right";
+    unit.facing = {
+      currentAngle: 0,
+      baseOffset: isFlipped ? FACING_OFFSET_FLIPPED : FACING_OFFSET_NORMAL,
+      isFlipped: isFlipped
+    };
+  }
+
+  // Apply the current facing angle to the unit's model
+  function applyFacing(unit: Unit): void {
+    if (!unit.modelRoot) return;
+
+    // Clear quaternion (GLTF uses quaternions which override Euler)
+    unit.modelRoot.rotationQuaternion = null;
+
+    // Calculate final rotation: same formula for both flipped and non-flipped
+    // The X scale flip handles mirroring internally
+    const finalRotation = unit.facing.currentAngle + unit.facing.baseOffset;
+
+    unit.modelRoot.rotation.y = finalRotation;
+  }
+
+  // Face a specific grid position
+  function faceTarget(unit: Unit, targetX: number, targetZ: number): void {
     const dx = targetX - unit.gridX;
     const dz = targetZ - unit.gridZ;
 
     if (dx === 0 && dz === 0) return;
 
-    // Calculate angle (0 = +Z direction, clockwise)
-    unit.facing = Math.atan2(dx, dz);
+    // Calculate angle from +Z axis (0 = facing +Z, positive = clockwise)
+    unit.facing.currentAngle = Math.atan2(dx, dz);
 
-    // Apply to model - MUST clear rotationQuaternion first (GLTF uses quaternions which override Euler)
-    if (unit.modelRoot) {
-      unit.modelRoot.rotationQuaternion = null;
+    applyFacing(unit);
 
-      // Account for negative X scale (handedness flip) which inverts rotation
-      const isFlipped = unit.customization?.handedness === "right";
-      if (isFlipped) {
-        // When X scale is negative, we need to negate the rotation
-        unit.modelRoot.rotation.y = -unit.facing;
-      } else {
-        unit.modelRoot.rotation.y = unit.facing;
-      }
+    // Update debug info and highlight (skip during initial setup)
+    if (!isInitialSetup) {
+      lastFacingDebugInfo = {
+        unit,
+        unitPos: { x: unit.gridX, z: unit.gridZ },
+        targetPos: { x: targetX, z: targetZ },
+        handedness: unit.customization?.handedness ?? "left"
+      };
+      updateFacingDebugHighlight(targetX, targetZ);
     }
   }
 
+  // Face the closest living enemy
+  function faceClosestEnemy(unit: Unit): void {
+    const enemies = units.filter(u => u.team !== unit.team && u.hp > 0);
+    if (enemies.length === 0) return;
+
+    // Find closest by Manhattan distance
+    let closest = enemies[0];
+    let closestDist = Math.abs(closest.gridX - unit.gridX) + Math.abs(closest.gridZ - unit.gridZ);
+
+    for (const enemy of enemies) {
+      const dist = Math.abs(enemy.gridX - unit.gridX) + Math.abs(enemy.gridZ - unit.gridZ);
+      if (dist < closestDist) {
+        closest = enemy;
+        closestDist = dist;
+      }
+    }
+
+    faceTarget(unit, closest.gridX, closest.gridZ);
+  }
+
+  // Face the average position of all enemies (for initial spawn)
   function faceAverageEnemyPosition(unit: Unit): void {
     const enemies = units.filter(u => u.team !== unit.team);
     if (enemies.length === 0) return;
@@ -284,7 +422,17 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
     const avgX = enemies.reduce((sum, e) => sum + e.gridX, 0) / enemies.length;
     const avgZ = enemies.reduce((sum, e) => sum + e.gridZ, 0) / enemies.length;
 
-    setUnitFacing(unit, avgX, avgZ);
+    faceTarget(unit, avgX, avgZ);
+  }
+
+  // Mark initial setup as complete (call after spawning)
+  function enableFacingDebug(): void {
+    isInitialSetup = false;
+  }
+
+  // Legacy alias for compatibility
+  function setUnitFacing(unit: Unit, targetX: number, targetZ: number): void {
+    faceTarget(unit, targetX, targetZ);
   }
 
   // ============================================
@@ -423,6 +571,7 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
   let isAnimatingMovement = false;
 
   function animateMovement(unit: Unit, targetX: number, targetZ: number, onComplete?: () => void): void {
+    console.log(`[FACING] animateMovement: ${unit.team} ${unit.type} from (${unit.gridX},${unit.gridZ}) to (${targetX},${targetZ})`);
     if (!unit.modelRoot) {
       // Fallback to instant movement if no model
       moveUnit(unit, targetX, targetZ, gridOffset);
@@ -432,7 +581,8 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
 
     isAnimatingMovement = true;
 
-    // First, face the target
+    // First, face the target (BEFORE updating gridX/gridZ)
+    console.log(`[FACING] Setting facing before move...`);
     setUnitFacing(unit, targetX, targetZ);
 
     // Calculate world positions
@@ -442,6 +592,7 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
     const endZ = targetZ * TILE_SIZE - gridOffset;
 
     // Update grid position immediately (for game logic)
+    console.log(`[FACING] Updating grid position from (${unit.gridX},${unit.gridZ}) to (${targetX},${targetZ})`);
     unit.gridX = targetX;
     unit.gridZ = targetZ;
 
@@ -472,6 +623,7 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
         // Animation complete
         scene.onBeforeRenderObservable.remove(moveObserver);
         isAnimatingMovement = false;
+        console.log(`[FACING] Movement animation complete. Unit now at grid (${unit.gridX},${unit.gridZ})`);
 
         // Snap to final position
         const finalX = endX;
@@ -543,13 +695,83 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
     }
   }
 
+  // ============================================
+  // INTENT INDICATOR SYSTEM
+  // ============================================
+
+  // Store intent indicator meshes (one per pending attack/heal action)
+  const intentIndicators: Mesh[] = [];
+
+  // Create a single intent indicator at target position
+  function createIntentIndicator(targetX: number, targetZ: number, color: Color3): Mesh {
+    const indicator = MeshBuilder.CreateCylinder(
+      "intent_indicator",
+      { diameter: 0.9, height: 0.06, tessellation: 24 },
+      scene
+    );
+    const indicatorMat = new StandardMaterial("intentMat", scene);
+    indicatorMat.diffuseColor = color;
+    indicatorMat.emissiveColor = color.scale(0.3);  // Slight glow effect
+    indicatorMat.alpha = 0.5;
+    indicator.material = indicatorMat;
+    indicator.position = new Vector3(
+      targetX * TILE_SIZE - gridOffset,
+      0.12,  // Slightly above tile
+      targetZ * TILE_SIZE - gridOffset
+    );
+    return indicator;
+  }
+
+  // Clear all intent indicators
+  function clearIntentIndicators(): void {
+    for (const indicator of intentIndicators) {
+      indicator.dispose();
+    }
+    intentIndicators.length = 0;
+  }
+
+  // Update intent indicators based on current pending actions
+  function updateIntentIndicators(): void {
+    clearIntentIndicators();
+
+    if (!turnState) return;
+
+    for (const action of turnState.pendingActions) {
+      if (action.type === "attack" && action.targetUnit) {
+        // Red indicator for attack
+        const indicator = createIntentIndicator(
+          action.targetUnit.gridX,
+          action.targetUnit.gridZ,
+          new Color3(0.9, 0.2, 0.2)  // Red
+        );
+        intentIndicators.push(indicator);
+      } else if (action.type === "ability" && action.abilityName === "heal" && action.targetUnit) {
+        // Green indicator for heal/support
+        const indicator = createIntentIndicator(
+          action.targetUnit.gridX,
+          action.targetUnit.gridZ,
+          new Color3(0.2, 0.9, 0.3)  // Green
+        );
+        intentIndicators.push(indicator);
+      } else if (action.type === "ability" && (action.abilityName === "conceal" || action.abilityName === "cover") && action.targetUnit) {
+        // Blue indicator for self-buff abilities
+        const indicator = createIntentIndicator(
+          action.targetUnit.gridX,
+          action.targetUnit.gridZ,
+          new Color3(0.2, 0.5, 0.9)  // Blue
+        );
+        intentIndicators.push(indicator);
+      }
+    }
+  }
+
   // Starting positions for each team
-  const playerPositions = [
+  const player1Positions = [
     { x: 1, z: 1 },
     { x: 3, z: 0 },
     { x: 5, z: 1 },
   ];
-  const enemyPositions = [
+  const player2Positions = [
     { x: 6, z: 6 },
     { x: 4, z: 7 },
     { x: 2, z: 6 },
@@ -557,26 +779,26 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
 
   // Use loadout if provided, otherwise default setup
   const defaultUnits: UnitSelection[] = [{ type: "tank" }, { type: "damage" }, { type: "support" }];
-  const playerSelections = loadout?.player ?? defaultUnits;
-  const enemySelections = loadout?.enemy ?? defaultUnits;
+  const player1Selections = loadout?.player1 ?? defaultUnits;
+  const player2Selections = loadout?.player2 ?? defaultUnits;
 
   // Get team colors from loadout or use defaults
-  const playerTeamColor = loadout?.playerTeamColor
-    ? hexToColor3(loadout.playerTeamColor)
+  const player1TeamColor = loadout?.player1TeamColor
+    ? hexToColor3(loadout.player1TeamColor)
     : new Color3(0.2, 0.4, 0.9);  // Default blue
-  const enemyTeamColor = loadout?.enemyTeamColor
-    ? hexToColor3(loadout.enemyTeamColor)
+  const player2TeamColor = loadout?.player2TeamColor
+    ? hexToColor3(loadout.player2TeamColor)
     : new Color3(0.9, 0.3, 0.2);  // Default red
 
   // Spawn units asynchronously
   async function spawnAllUnits(): Promise<void> {
-    // Spawn player units
-    for (let i = 0; i < playerSelections.length; i++) {
-      const pos = playerPositions[i];
-      const selection = playerSelections[i];
+    // Spawn player1 units
+    for (let i = 0; i < player1Selections.length; i++) {
+      const pos = player1Positions[i];
+      const selection = player1Selections[i];
       const unit = await createUnit(
         selection.type,
-        "player",
+        "player1",
         pos.x,
         pos.z,
         scene,
@@ -584,19 +806,19 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
         gridOffset,
         gui,
         i,
-        playerTeamColor,
+        player1TeamColor,
         selection.customization
       );
       units.push(unit);
     }
 
-    // Spawn enemy units
-    for (let i = 0; i < enemySelections.length; i++) {
-      const pos = enemyPositions[i];
-      const selection = enemySelections[i];
+    // Spawn player2 units
+    for (let i = 0; i < player2Selections.length; i++) {
+      const pos = player2Positions[i];
+      const selection = player2Selections[i];
       const unit = await createUnit(
         selection.type,
-        "enemy",
+        "player2",
         pos.x,
         pos.z,
         scene,
@@ -604,16 +826,27 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
         gridOffset,
         gui,
         i,
-        enemyTeamColor,
+        player2TeamColor,
         selection.customization
       );
       units.push(unit);
     }
 
-    // Set initial facing for all units (face average enemy position)
+    // Set initial facing for all units (face average opposing team position)
     for (const unit of units) {
+      initFacing(unit);  // Initialize facing config based on handedness
       faceAverageEnemyPosition(unit);
+      // Show model and HP bar now that facing is correct
+      if (unit.modelRoot) {
+        unit.modelRoot.setEnabled(true);
+      }
+      if (unit.hpBarBg) {
+        unit.hpBarBg.isVisible = true;
+      }
     }
+
+    // Enable facing debug now that initial setup is done
+    enableFacingDebug();
 
     // Start the game after all units are loaded
     startGame();
@@ -774,14 +1007,14 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
   function buildFirstRoundQueue(): void {
     // Alternate teams: P1, P2, P1, P2, P1, P2
     // Within team, use loadout order
-    const playerUnits = units.filter(u => u.team === "player").sort((a, b) => a.loadoutIndex - b.loadoutIndex);
-    const enemyUnits = units.filter(u => u.team === "enemy").sort((a, b) => a.loadoutIndex - b.loadoutIndex);
+    const player1Units = units.filter(u => u.team === "player1").sort((a, b) => a.loadoutIndex - b.loadoutIndex);
+    const player2Units = units.filter(u => u.team === "player2").sort((a, b) => a.loadoutIndex - b.loadoutIndex);
 
     firstRoundQueue = [];
-    const maxLen = Math.max(playerUnits.length, enemyUnits.length);
+    const maxLen = Math.max(player1Units.length, player2Units.length);
     for (let i = 0; i < maxLen; i++) {
-      if (playerUnits[i]) firstRoundQueue.push(playerUnits[i]);
-      if (enemyUnits[i]) firstRoundQueue.push(enemyUnits[i]);
+      if (player1Units[i]) firstRoundQueue.push(player1Units[i]);
+      if (player2Units[i]) firstRoundQueue.push(player2Units[i]);
     }
   }
 
@@ -833,6 +1066,7 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
   }
 
   function startUnitTurn(unit: Unit): void {
+    console.log("startUnitTurn called for:", unit.type, unit.team);
     currentUnit = unit;
     unit.hasMoved = false;
     unit.hasAttacked = false;
@@ -860,7 +1094,7 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
       actionsRemaining: 2,
       pendingActions: [],
       originalPosition: { x: unit.gridX, z: unit.gridZ },
-      originalFacing: unit.facing,
+      originalFacing: unit.facing.currentAngle,
     };
 
     // Call turn start callback (for command menu update)
@@ -870,6 +1104,7 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
   }
 
   function endCurrentUnitTurn(): void {
+    console.log("endCurrentUnitTurn called, currentUnit:", currentUnit?.type, currentUnit?.team);
     const unit = currentUnit;
     if (!unit) return;
 
@@ -889,6 +1124,7 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
     clearCornerIndicators();
     clearShadowPreview();
     clearAttackPreview();
+    clearIntentIndicators();
 
     lastActingTeam = unit.team;
     clearHighlights();
@@ -897,6 +1133,7 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
 
     // Get next unit
     const nextUnit = getNextUnit();
+    console.log("getNextUnit returned:", nextUnit?.type, nextUnit?.team);
     if (nextUnit) {
       // Consume the speed bonus from previous turn (it only lasts one turn)
       // The bonus was already used in accumulator calculation, now clear it
@@ -904,6 +1141,8 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
       startUnitTurn(nextUnit);
       // After starting turn, clear the bonus (it was used for this turn's accumulation)
       nextUnit.speedBonus = 0;
+    } else {
+      console.log("No next unit found! Units remaining:", units.length, units.map(u => `${u.team}-${u.type}`));
     }
   }
 
@@ -946,14 +1185,17 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
     }
   }
 
-  function getValidMoveTiles(unit: Unit): { x: number; z: number }[] {
+  function getValidMoveTiles(unit: Unit, fromX?: number, fromZ?: number): { x: number; z: number }[] {
     if (!hasActionsRemaining()) return []; // No actions remaining
+    const startX = fromX ?? unit.gridX;
+    const startZ = fromZ ?? unit.gridZ;
     const valid: { x: number; z: number }[] = [];
     for (let x = 0; x < GRID_SIZE; x++) {
       for (let z = 0; z < GRID_SIZE; z++) {
-        const distance = Math.abs(x - unit.gridX) + Math.abs(z - unit.gridZ);
+        const distance = Math.abs(x - startX) + Math.abs(z - startZ);
         if (distance > 0 && distance <= unit.moveRange) {
-          const occupied = units.some(u => u.gridX === x && u.gridZ === z);
+          // Check if occupied (but exclude the unit's original position since they're moving from there)
+          const occupied = units.some(u => u.gridX === x && u.gridZ === z && !(u === unit && fromX !== undefined));
           if (!occupied) {
             valid.push({ x, z });
           }
@@ -987,23 +1229,27 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
   function highlightValidActions(unit: Unit): void {
     clearHighlights();
 
-    // Highlight move tiles (if hasn't moved)
-    const validTiles = getValidMoveTiles(unit);
+    // Use shadow position if there's a pending move, otherwise use current position
+    const effectiveX = shadowPosition?.x ?? unit.gridX;
+    const effectiveZ = shadowPosition?.z ?? unit.gridZ;
+
+    // Highlight move tiles from effective position
+    const validTiles = getValidMoveTiles(unit, effectiveX, effectiveZ);
     for (const { x, z } of validTiles) {
       const tile = tiles[x][z];
       tile.material = validMoveMaterial;
       highlightedTiles.push(tile);
     }
 
-    // Highlight current tile
-    const currentTile = tiles[unit.gridX][unit.gridZ];
+    // Highlight effective position (shadow or current)
+    const currentTile = tiles[effectiveX][effectiveZ];
     currentTile.material = selectedMaterial;
     highlightedTiles.push(currentTile);
 
     // Highlight attackable enemies (if hasn't attacked)
     attackableUnits = getAttackableEnemies(unit);
-    for (const enemy of attackableUnits) {
-      const tile = tiles[enemy.gridX][enemy.gridZ];
+    for (const player2 of attackableUnits) {
+      const tile = tiles[player2.gridX][player2.gridZ];
       tile.material = attackableMaterial;
       highlightedTiles.push(tile);
     }
@@ -1030,18 +1276,18 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
     // Get valid attack tiles with LOS info
     const attackTiles = getValidAttackTiles(unit, x, z);
 
-    // Check each enemy
-    for (const enemy of units) {
-      if (enemy.team === unit.team) continue;
-      if (enemy.hp <= 0) continue;
+    // Check each player2
+    for (const player2 of units) {
+      if (player2.team === unit.team) continue;
+      if (player2.hp <= 0) continue;
 
-      // Find if this enemy's tile is in our attack tiles
-      const tileInfo = attackTiles.find(t => t.x === enemy.gridX && t.z === enemy.gridZ);
+      // Find if this player2's tile is in our attack tiles
+      const tileInfo = attackTiles.find(t => t.x === player2.gridX && t.z === player2.gridZ);
       if (tileInfo) {
-        const tile = tiles[enemy.gridX][enemy.gridZ];
+        const tile = tiles[player2.gridX][player2.gridZ];
         if (tileInfo.hasLOS) {
           tile.material = attackableMaterial;
-          attackableUnits.push(enemy);
+          attackableUnits.push(player2);
         } else {
           tile.material = blockedMaterial;
         }
@@ -1064,11 +1310,11 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
 
     const attackTiles = getValidAttackTiles(unit, x, z);
 
-    return units.filter(enemy => {
-      if (enemy.team === unit.team) return false;
-      if (enemy.hp <= 0) return false;
+    return units.filter(player2 => {
+      if (player2.team === unit.team) return false;
+      if (player2.hp <= 0) return false;
 
-      const tileInfo = attackTiles.find(t => t.x === enemy.gridX && t.z === enemy.gridZ);
+      const tileInfo = attackTiles.find(t => t.x === player2.gridX && t.z === player2.gridZ);
       return tileInfo?.hasLOS ?? false;
     });
   }
@@ -1078,18 +1324,22 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
   // ============================================
 
   // Highlight healable allies for Medic's Heal ability
-  function highlightHealTargets(unit: Unit): void {
+  function highlightHealTargets(unit: Unit, fromX?: number, fromZ?: number): void {
     clearHighlights();
     healableUnits = [];
 
     if (!hasActionsRemaining() || unit.healAmount <= 0) return;
+
+    // Use shadow position if pending move, otherwise current position
+    const effectiveX = fromX ?? shadowPosition?.x ?? unit.gridX;
+    const effectiveZ = fromZ ?? shadowPosition?.z ?? unit.gridZ;
 
     // Can heal self or adjacent allies
     for (const ally of units) {
       if (ally.team !== unit.team) continue;
       if (ally.hp >= ally.maxHp) continue;  // Already at full health
 
-      const distance = Math.abs(ally.gridX - unit.gridX) + Math.abs(ally.gridZ - unit.gridZ);
+      const distance = Math.abs(ally.gridX - effectiveX) + Math.abs(ally.gridZ - effectiveZ);
       if (distance <= 1) {  // Self (0) or adjacent (1)
         const tile = tiles[ally.gridX][ally.gridZ];
         tile.material = healableMaterial;
@@ -1098,8 +1348,8 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
       }
     }
 
-    // Highlight current position
-    const currentTile = tiles[unit.gridX][unit.gridZ];
+    // Highlight effective position
+    const currentTile = tiles[effectiveX][effectiveZ];
     if (!highlightedTiles.includes(currentTile)) {
       currentTile.material = selectedMaterial;
       highlightedTiles.push(currentTile);
@@ -1314,15 +1564,15 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
   }
 
   function checkWinCondition(): void {
-    const playerUnits = units.filter(u => u.team === "player");
-    const enemyUnits = units.filter(u => u.team === "enemy");
+    const player1Units = units.filter(u => u.team === "player1");
+    const player2Units = units.filter(u => u.team === "player2");
 
-    if (enemyUnits.length === 0) {
+    if (player2Units.length === 0) {
       gameOver = true;
-      showGameOver(playerTeamColor, "Player 1");
-    } else if (playerUnits.length === 0) {
+      showGameOver(player1TeamColor, "Player 1");
+    } else if (player1Units.length === 0) {
       gameOver = true;
-      showGameOver(enemyTeamColor, "Player 2");
+      showGameOver(player2TeamColor, "Player 2");
     }
   }
 
@@ -1391,7 +1641,7 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
   function updateTurnIndicator(): void {
     if (!currentUnit) return;
 
-    const teamName = currentUnit.team === "player" ? "Player 1" : "Player 2";
+    const teamName = currentUnit.team === "player1" ? "Player 1" : "Player 2";
     // Convert Color3 to hex for GUI
     const r = Math.round(currentUnit.teamColor.r * 255).toString(16).padStart(2, '0');
     const g = Math.round(currentUnit.teamColor.g * 255).toString(16).padStart(2, '0');
@@ -1423,14 +1673,14 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
     // Get valid attack tiles from shadow position
     const attackTiles = getValidAttackTiles(unit, fromX, fromZ);
 
-    // Show preview on enemy tiles
-    for (const enemy of units) {
-      if (enemy.team === unit.team) continue;
-      if (enemy.hp <= 0) continue;
+    // Show preview on player2 tiles
+    for (const player2 of units) {
+      if (player2.team === unit.team) continue;
+      if (player2.hp <= 0) continue;
 
-      const tileInfo = attackTiles.find(t => t.x === enemy.gridX && t.z === enemy.gridZ);
+      const tileInfo = attackTiles.find(t => t.x === player2.gridX && t.z === player2.gridZ);
       if (tileInfo) {
-        const tile = tiles[enemy.gridX][enemy.gridZ];
+        const tile = tiles[player2.gridX][player2.gridZ];
         // Use a lighter version of attack/blocked colors for preview
         if (tileInfo.hasLOS) {
           tile.material = attackableMaterial;
@@ -1504,6 +1754,9 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
     currentActionMode = "none";
     selectedUnit = null;
 
+    // Update intent indicators (red for attack)
+    updateIntentIndicators();
+
     // Update menu to show queued action
     updateCommandMenu();
   }
@@ -1527,6 +1780,51 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
     currentActionMode = "none";
     selectedUnit = null;
 
+    // Update intent indicators (green for heal)
+    updateIntentIndicators();
+
+    // Update menu to show queued action
+    updateCommandMenu();
+  }
+
+  // Queue a conceal action instead of executing immediately
+  function queueConcealAction(unit: Unit): void {
+    if (!turnState) return;
+
+    // Add to pending actions
+    turnState.pendingActions.push({
+      type: "ability",
+      abilityName: "conceal",
+      targetUnit: unit,  // Self-targeting
+    });
+
+    // Consume an action
+    turnState.actionsRemaining--;
+
+    // Update intent indicators (blue for self-buff)
+    updateIntentIndicators();
+
+    // Update menu to show queued action
+    updateCommandMenu();
+  }
+
+  // Queue a cover action instead of executing immediately
+  function queueCoverAction(unit: Unit): void {
+    if (!turnState) return;
+
+    // Add to pending actions
+    turnState.pendingActions.push({
+      type: "ability",
+      abilityName: "cover",
+      targetUnit: unit,  // Self-targeting
+    });
+
+    // Consume an action
+    turnState.actionsRemaining--;
+
+    // Update intent indicators (blue for self-buff)
+    updateIntentIndicators();
+
     // Update menu to show queued action
     updateCommandMenu();
   }
@@ -1544,14 +1842,19 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
     const unit = turnState.unit;
     const actions = [...turnState.pendingActions];  // Copy the array
 
-    // Clear previews
+    // Clear previews, shadow position, and intent indicators
     clearShadowPreview();
     clearAttackPreview();
+    clearIntentIndicators();
+    shadowPosition = null;
 
     // Process actions sequentially
     function processNextAction(index: number): void {
+      console.log(`[FACING] processNextAction index=${index}, total actions=${actions.length}`);
       if (index >= actions.length) {
-        // All actions complete
+        // All actions complete - face closest enemy before ending turn
+        console.log(`[FACING] All actions complete, calling faceClosestEnemy for ${unit.team} ${unit.type}`);
+        faceClosestEnemy(unit);
         isExecutingActions = false;
         endCurrentUnitTurn();
         return;
@@ -1575,6 +1878,16 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
         executeHeal(unit, action.targetUnit, () => {
           processNextAction(index + 1);
         });
+      } else if (action.type === "ability" && action.abilityName === "conceal") {
+        // Execute conceal
+        executeConceal(unit, () => {
+          processNextAction(index + 1);
+        });
+      } else if (action.type === "ability" && action.abilityName === "cover") {
+        // Execute cover
+        executeCover(unit, () => {
+          processNextAction(index + 1);
+        });
       } else {
         // Unknown action, skip
         processNextAction(index + 1);
@@ -1588,76 +1901,81 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
   // Execute attack (called during execution phase)
   function executeAttack(attacker: Unit, defender: Unit, onComplete: () => void): void {
     // Face the defender
+    console.log(`[FACING] executeAttack: ${attacker.team} ${attacker.type} at (${attacker.gridX},${attacker.gridZ}) attacking ${defender.team} ${defender.type} at (${defender.gridX},${defender.gridZ})`);
     setUnitFacing(attacker, defender.gridX, defender.gridZ);
 
     // Play attack animation based on combat style
     const isMelee = attacker.customization?.combatStyle === "melee";
     const attackAnim = isMelee ? "Sword_Slash" : "Gun_Shoot";
 
+    // Play attacker animation, then apply damage after a delay for impact
     playAnimation(attacker, attackAnim, false, () => {
       playIdleAnimation(attacker);
     });
 
-    // Check if defender is concealed
-    if (defender.isConcealed) {
-      defender.isConcealed = false;
-      if (defender.modelMeshes) {
-        defender.modelMeshes.forEach(mesh => {
-          if (mesh.material) {
-            (mesh.material as PBRMaterial).alpha = 1.0;
-          }
+    // Delay the impact to sync with attack animation (300ms for impact moment)
+    setTimeout(() => {
+      // Check if defender is concealed
+      if (defender.isConcealed) {
+        defender.isConcealed = false;
+        if (defender.modelMeshes) {
+          defender.modelMeshes.forEach(mesh => {
+            if (mesh.material) {
+              (mesh.material as PBRMaterial).alpha = 1.0;
+            }
+          });
+        }
+        console.log(`${defender.team} ${defender.type}'s Conceal was broken! Damage negated!`);
+        if (attacker.type === "support") playSfx(sfx.hitLight);
+        else if (attacker.type === "tank") playSfx(sfx.hitMedium);
+        else if (attacker.type === "damage") playSfx(sfx.hitHeavy);
+
+        playAnimation(defender, "HitRecieve", false, () => {
+          playIdleAnimation(defender);
+          onComplete();
         });
+        return;
       }
-      console.log(`${defender.team} ${defender.type}'s Conceal was broken! Damage negated!`);
+
+      // Apply damage
+      defender.hp -= attacker.attack;
+      console.log(`${attacker.team} ${attacker.type} attacks ${defender.team} ${defender.type} for ${attacker.attack} damage! (${defender.hp}/${defender.maxHp} HP)`);
+
       if (attacker.type === "support") playSfx(sfx.hitLight);
       else if (attacker.type === "tank") playSfx(sfx.hitMedium);
       else if (attacker.type === "damage") playSfx(sfx.hitHeavy);
 
-      playAnimation(defender, "HitReceive", false, () => {
-        playIdleAnimation(defender);
-        onComplete();
-      });
-      return;
-    }
+      updateHpBar(defender);
 
-    // Apply damage
-    defender.hp -= attacker.attack;
-    console.log(`${attacker.team} ${attacker.type} attacks ${defender.team} ${defender.type} for ${attacker.attack} damage! (${defender.hp}/${defender.maxHp} HP)`);
+      if (defender.hp <= 0) {
+        console.log(`${defender.team} ${defender.type} was defeated!`);
+        if (defender.isCovering) {
+          defender.isCovering = false;
+          clearCoverVisualization();
+        }
 
-    if (attacker.type === "support") playSfx(sfx.hitLight);
-    else if (attacker.type === "tank") playSfx(sfx.hitMedium);
-    else if (attacker.type === "damage") playSfx(sfx.hitHeavy);
+        playAnimation(defender, "Death", false, () => {
+          defender.mesh.dispose();
+          if (defender.hpBar) defender.hpBar.dispose();
+          if (defender.hpBarBg) defender.hpBarBg.dispose();
+          if (defender.modelRoot) defender.modelRoot.dispose();
+          if (defender.animationGroups) defender.animationGroups.forEach(ag => ag.dispose());
+          onComplete();
+        });
 
-    updateHpBar(defender);
+        const index = units.indexOf(defender);
+        if (index > -1) units.splice(index, 1);
+        const queueIndex = firstRoundQueue.indexOf(defender);
+        if (queueIndex > -1) firstRoundQueue.splice(queueIndex, 1);
 
-    if (defender.hp <= 0) {
-      console.log(`${defender.team} ${defender.type} was defeated!`);
-      if (defender.isCovering) {
-        defender.isCovering = false;
-        clearCoverVisualization();
+        checkWinCondition();
+      } else {
+        playAnimation(defender, "HitRecieve", false, () => {
+          playIdleAnimation(defender);
+          onComplete();
+        });
       }
-
-      playAnimation(defender, "Death", false, () => {
-        defender.mesh.dispose();
-        if (defender.hpBar) defender.hpBar.dispose();
-        if (defender.hpBarBg) defender.hpBarBg.dispose();
-        if (defender.modelRoot) defender.modelRoot.dispose();
-        if (defender.animationGroups) defender.animationGroups.forEach(ag => ag.dispose());
-        onComplete();
-      });
-
-      const index = units.indexOf(defender);
-      if (index > -1) units.splice(index, 1);
-      const queueIndex = firstRoundQueue.indexOf(defender);
-      if (queueIndex > -1) firstRoundQueue.splice(queueIndex, 1);
-
-      checkWinCondition();
-    } else {
-      playAnimation(defender, "HitReceive", false, () => {
-        playIdleAnimation(defender);
-        onComplete();
-      });
-    }
+    }, 300); // 300ms delay for attack animation to reach impact
   }
 
   // Execute heal (called during execution phase)
@@ -1693,6 +2011,110 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
     updateHpBar(target);
   }
 
+  // Execute conceal ability (called during execution phase)
+  function executeConceal(unit: Unit, onComplete: () => void): void {
+    unit.isConcealed = !unit.isConcealed;
+
+    if (unit.isConcealed) {
+      // Make model semi-transparent
+      if (unit.modelMeshes) {
+        unit.modelMeshes.forEach(mesh => {
+          if (mesh.material) {
+            (mesh.material as PBRMaterial).alpha = 0.4;
+          }
+        });
+      }
+      console.log(`${unit.team} ${unit.type} activates Conceal!`);
+    } else {
+      // Restore full visibility
+      if (unit.modelMeshes) {
+        unit.modelMeshes.forEach(mesh => {
+          if (mesh.material) {
+            (mesh.material as PBRMaterial).alpha = 1.0;
+          }
+        });
+      }
+      console.log(`${unit.team} ${unit.type} deactivates Conceal.`);
+    }
+
+    // Play interact animation
+    if (unit.modelMeshes) {
+      const weaponMeshes = unit.modelMeshes.filter(m =>
+        m.name.toLowerCase().includes("sword") || m.name.toLowerCase().includes("pistol")
+      );
+      weaponMeshes.forEach(m => m.setEnabled(false));
+
+      playAnimation(unit, "Interact", false, () => {
+        const isMelee = unit.customization?.combatStyle === "melee";
+        unit.modelMeshes?.forEach(m => {
+          if (m.name.toLowerCase().includes("sword")) {
+            m.setEnabled(isMelee);
+          } else if (m.name.toLowerCase().includes("pistol")) {
+            m.setEnabled(!isMelee);
+          }
+        });
+        playIdleAnimation(unit);
+        onComplete();
+      });
+    } else {
+      onComplete();
+    }
+  }
+
+  // Execute cover ability (called during execution phase)
+  function executeCover(unit: Unit, onComplete: () => void): void {
+    unit.isCovering = !unit.isCovering;
+
+    // Clear existing cover visualization
+    clearCoverVisualization();
+
+    if (unit.isCovering) {
+      // Get covered tiles based on weapon type
+      const isMelee = unit.customization?.combatStyle === "melee";
+      let coveredTiles: { x: number; z: number }[];
+
+      if (isMelee) {
+        // Sword: Cover all 4 adjacent ordinal tiles
+        coveredTiles = getAdjacentOrdinalTiles(unit.gridX, unit.gridZ);
+      } else {
+        // Gun: Cover all tiles in LOS that they could shoot (not adjacent)
+        coveredTiles = getTilesInLOS(unit.gridX, unit.gridZ, true, unit);
+      }
+
+      // Create pulsing border visualization for covered tiles
+      for (const { x, z } of coveredTiles) {
+        createCoverBorder(x, z, unit.teamColor);
+      }
+
+      console.log(`${unit.team} ${unit.type} activates Cover! (${coveredTiles.length} tiles)`);
+    } else {
+      console.log(`${unit.team} ${unit.type} deactivates Cover.`);
+    }
+
+    // Play interact animation
+    if (unit.modelMeshes) {
+      const weaponMeshes = unit.modelMeshes.filter(m =>
+        m.name.toLowerCase().includes("sword") || m.name.toLowerCase().includes("pistol")
+      );
+      weaponMeshes.forEach(m => m.setEnabled(false));
+
+      playAnimation(unit, "Interact", false, () => {
+        const isMelee = unit.customization?.combatStyle === "melee";
+        unit.modelMeshes?.forEach(m => {
+          if (m.name.toLowerCase().includes("sword")) {
+            m.setEnabled(isMelee);
+          } else if (m.name.toLowerCase().includes("pistol")) {
+            m.setEnabled(!isMelee);
+          }
+        });
+        playIdleAnimation(unit);
+        onComplete();
+      });
+    } else {
+      onComplete();
+    }
+  }
+
   // Undo the last queued action
   function undoLastAction(): void {
     if (!turnState || turnState.pendingActions.length === 0) return;
@@ -1705,6 +2127,9 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
       clearShadowPreview();
       shadowPosition = null;
     }
+
+    // Update intent indicators to reflect remaining actions
+    updateIntentIndicators();
 
     updateCommandMenu();
   }
@@ -1739,6 +2164,32 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
           selectedUnit = null;
           if (isMenuDriven) currentActionMode = "none";
         }
+      } else if (selectedUnit && currentActionMode === "attack") {
+        // Check if there's an attackable unit on this tile
+        const targetUnit = attackableUnits.find(u => u.gridX === gridX && u.gridZ === gridZ);
+        if (targetUnit) {
+          console.log("Queueing attack action (via tile click)");
+          queueAttackAction(selectedUnit, targetUnit);
+        } else {
+          // Clicked invalid tile, cancel attack mode
+          clearHighlights();
+          selectedUnit = null;
+          currentActionMode = "none";
+        }
+      } else if (selectedUnit && currentActionMode === "ability") {
+        // Check if there's a healable unit on this tile
+        const targetUnit = healableUnits.find(u => u.gridX === gridX && u.gridZ === gridZ);
+        if (targetUnit) {
+          queueHealAction(selectedUnit, targetUnit);
+          clearHighlights();
+          selectedUnit = null;
+          currentActionMode = "none";
+        } else {
+          // Clicked invalid tile, cancel ability mode
+          clearHighlights();
+          selectedUnit = null;
+          currentActionMode = "none";
+        }
       }
     } else if (metadata?.type === "unit") {
       const clickedUnit = units.find(u =>
@@ -1748,7 +2199,7 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
       if (!clickedUnit) return;
 
       if (selectedUnit) {
-        // Check if clicking an attackable enemy
+        // Check if clicking an attackable player2
         console.log(`Click on unit: mode=${currentActionMode}, attackableUnits=${attackableUnits.length}, includes=${attackableUnits.includes(clickedUnit)}`);
         if (attackableUnits.includes(clickedUnit) && currentActionMode === "attack") {
           console.log("Queueing attack action");
@@ -1787,19 +2238,6 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
   turnText.fontWeight = "bold";
   gui.addControl(turnText);
 
-  // End turn button
-  const endTurnBtn = Button.CreateSimpleButton("endTurn", "END TURN");
-  endTurnBtn.width = "120px";
-  endTurnBtn.height = "40px";
-  endTurnBtn.color = "white";
-  endTurnBtn.background = "#444444";
-  endTurnBtn.cornerRadius = 5;
-  endTurnBtn.top = "45%";
-  endTurnBtn.onPointerClickObservable.add(() => {
-    endTurn();
-  });
-  gui.addControl(endTurnBtn);
-
   // Rotation buttons
   const rotateLeftBtn = Button.CreateSimpleButton("rotateLeft", "↺");
   rotateLeftBtn.width = "50px";
@@ -1834,7 +2272,7 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
   // Main menu container - bottom left
   const commandMenu = new Rectangle("commandMenu");
   commandMenu.width = "200px";
-  commandMenu.height = "280px";
+  commandMenu.height = "340px";
   commandMenu.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_LEFT;
   commandMenu.verticalAlignment = Control.VERTICAL_ALIGNMENT_BOTTOM;
   commandMenu.left = "20px";
@@ -1920,8 +2358,10 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
     if (currentUnit && !isAnimatingMovement) {
       currentActionMode = "attack";
       selectedUnit = currentUnit;
-      // Highlight attack targets with LOS consideration
-      highlightAttackTargets(currentUnit);
+      // Highlight attack targets from shadow position (if pending move) or current position
+      const effectiveX = shadowPosition?.x ?? currentUnit.gridX;
+      const effectiveZ = shadowPosition?.z ?? currentUnit.gridZ;
+      highlightAttackTargets(currentUnit, effectiveX, effectiveZ);
       console.log(`Attack mode set, attackableUnits found: ${attackableUnits.length}`);
     }
   });
@@ -1943,11 +2383,11 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
         selectedUnit = currentUnit;
         highlightHealTargets(currentUnit);
       } else if (currentUnit.type === "damage") {
-        // Conceal - toggle immediately
-        toggleConceal(currentUnit);
+        // Conceal - queue as action
+        queueConcealAction(currentUnit);
       } else if (currentUnit.type === "tank") {
-        // Cover - toggle immediately
-        toggleCover(currentUnit);
+        // Cover - queue as action
+        queueCoverAction(currentUnit);
       }
     }
   });
@@ -1975,8 +2415,9 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
   previewText.text = "(no actions queued)";
   previewText.color = "#aaaaaa";
   previewText.fontSize = 11;
-  previewText.height = "35px";
+  previewText.height = "80px";
   previewText.textHorizontalAlignment = Control.HORIZONTAL_ALIGNMENT_LEFT;
+  previewText.textVerticalAlignment = Control.VERTICAL_ALIGNMENT_TOP;
   previewText.textWrapping = true;
   menuStack.addControl(previewText);
 
@@ -2015,6 +2456,22 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
   });
   bottomButtonsGrid.addControl(executeBtn, 0, 1);
 
+  // Pulse the execute button when actions are queued
+  let executePulseTime = 0;
+  scene.onBeforeRenderObservable.add(() => {
+    const shouldPulse = turnState && turnState.pendingActions.length > 0 && turnState.actionsRemaining === 0;
+    if (shouldPulse) {
+      executePulseTime += engine.getDeltaTime() / 1000;
+      const pulse = 0.7 + 0.3 * Math.sin(executePulseTime * 4);
+      const g = Math.round(0x88 * pulse);
+      const gHex = g.toString(16).padStart(2, '0');
+      executeBtn.background = `#33${gHex}33`;
+    } else {
+      executePulseTime = 0;
+      executeBtn.background = "#338833";
+    }
+  });
+
   // Function to update menu for current unit
   function updateCommandMenu(): void {
     if (!currentUnit) {
@@ -2025,7 +2482,7 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
     commandMenu.isVisible = true;
 
     // Position menu based on team (P1 = left, P2 = right)
-    if (currentUnit.team === "player") {
+    if (currentUnit.team === "player1") {
       commandMenu.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_LEFT;
       commandMenu.left = "20px";
     } else {
@@ -2087,6 +2544,10 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
         } else if (action.type === "ability" && action.abilityName === "heal" && action.targetUnit) {
           const targetName = action.targetUnit === currentUnit ? "self" : action.targetUnit.type;
           lines.push(`  Heal ${targetName}`);
+        } else if (action.type === "ability" && action.abilityName === "conceal") {
+          lines.push(`  Conceal`);
+        } else if (action.type === "ability" && action.abilityName === "cover") {
+          lines.push(`  Cover`);
         }
       }
     }
@@ -2103,8 +2564,6 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
     const remaining = turnState.actionsRemaining;
     if (remaining > 0 && turnState.pendingActions.length < 2) {
       lines.push(`${remaining} action(s) left`);
-    } else if (turnState.pendingActions.length > 0) {
-      lines.push("Press Execute!");
     }
 
     previewText.text = lines.join("\n");
@@ -2168,6 +2627,9 @@ async function createUnit(
   const modelRoot = result.meshes[0];
   const modelMeshes = result.meshes;
   const animationGroups = result.animationGroups;
+
+  // Hide model initially until facing is set (prevents wrong-direction flash)
+  modelRoot.setEnabled(false);
 
   // Position and scale the model
   const modelScale = 0.5;
@@ -2243,6 +2705,7 @@ async function createUnit(
   hpBarBg.background = "#333333";
   hpBarBg.thickness = 1;
   hpBarBg.color = "#000000";
+  hpBarBg.isVisible = false;  // Hide until model is ready
   gui.addControl(hpBarBg);
   hpBarBg.linkWithMesh(hpBarAnchor);
   hpBarBg.linkOffsetY = -50;
@@ -2284,7 +2747,11 @@ async function createUnit(
     animationGroups,
     customization: c,
     teamColor,
-    facing: 0,  // Will be set after spawn
+    facing: {  // Will be initialized via initFacing after spawn
+      currentAngle: 0,
+      baseOffset: 0,
+      isFlipped: false
+    },
     isConcealed: false,
     isCovering: false,
   };
