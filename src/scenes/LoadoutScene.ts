@@ -1035,7 +1035,7 @@ export function createLoadoutScene(
       if (selectionArray.length < 3 && selectedClass) {
         selectionArray.push({
           type: selectedClass,
-          customization: selectedClass === "support" ? { ...currentCustomization } : undefined
+          customization: { ...currentCustomization }  // Apply customization to all unit types
         });
         updateSelectionDisplay();
         updateStartButton();

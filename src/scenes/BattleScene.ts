@@ -216,6 +216,186 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
     }
   }
 
+  // ============================================
+  // TERRAIN GENERATION
+  // ============================================
+
+  // Store terrain positions for collision checking
+  const terrainTiles: Set<string> = new Set();
+
+  // Starting positions to avoid
+  const reservedPositions = new Set([
+    "1,1", "3,0", "5,1",  // Player 1 spawns
+    "6,6", "4,7", "2,6",  // Player 2 spawns
+  ]);
+
+  // Check if a path exists from bottom row (z=0) to top row (z=7) avoiding terrain
+  function hasPathBetweenRows(blocked: Set<string>): boolean {
+    const visited = new Set<string>();
+    const queue: [number, number][] = [];
+
+    // Start from all non-blocked tiles on z=0
+    for (let x = 0; x < GRID_SIZE; x++) {
+      const key = `${x},0`;
+      if (!blocked.has(key)) {
+        queue.push([x, 0]);
+        visited.add(key);
+      }
+    }
+
+    while (queue.length > 0) {
+      const [cx, cz] = queue.shift()!;
+
+      // Reached top row
+      if (cz === GRID_SIZE - 1) return true;
+
+      // Check cardinal directions
+      const directions = [[0, 1], [0, -1], [1, 0], [-1, 0]];
+      for (const [dx, dz] of directions) {
+        const nx = cx + dx;
+        const nz = cz + dz;
+        const key = `${nx},${nz}`;
+
+        if (nx < 0 || nx >= GRID_SIZE || nz < 0 || nz >= GRID_SIZE) continue;
+        if (visited.has(key) || blocked.has(key)) continue;
+
+        visited.add(key);
+        queue.push([nx, nz]);
+      }
+    }
+
+    return false;
+  }
+
+  // Count distinct paths by checking if path exists after blocking each tile on a found path
+  function hasMultiplePaths(blocked: Set<string>): boolean {
+    // Find one path first
+    const visited = new Set<string>();
+    const parent = new Map<string, string | null>();
+    const queue: [number, number][] = [];
+
+    for (let x = 0; x < GRID_SIZE; x++) {
+      const key = `${x},0`;
+      if (!blocked.has(key)) {
+        queue.push([x, 0]);
+        visited.add(key);
+        parent.set(key, null);
+      }
+    }
+
+    let endKey: string | null = null;
+    while (queue.length > 0 && !endKey) {
+      const [cx, cz] = queue.shift()!;
+      const currentKey = `${cx},${cz}`;
+
+      if (cz === GRID_SIZE - 1) {
+        endKey = currentKey;
+        break;
+      }
+
+      const directions = [[0, 1], [0, -1], [1, 0], [-1, 0]];
+      for (const [dx, dz] of directions) {
+        const nx = cx + dx;
+        const nz = cz + dz;
+        const key = `${nx},${nz}`;
+
+        if (nx < 0 || nx >= GRID_SIZE || nz < 0 || nz >= GRID_SIZE) continue;
+        if (visited.has(key) || blocked.has(key)) continue;
+
+        visited.add(key);
+        parent.set(key, currentKey);
+        queue.push([nx, nz]);
+      }
+    }
+
+    if (!endKey) return false; // No path at all
+
+    // Reconstruct path
+    const pathTiles: string[] = [];
+    let current: string | null = endKey;
+    while (current) {
+      pathTiles.push(current);
+      current = parent.get(current) || null;
+    }
+
+    // Check if blocking any tile on the path still leaves an alternative
+    for (const tile of pathTiles) {
+      const testBlocked = new Set(blocked);
+      testBlocked.add(tile);
+      if (hasPathBetweenRows(testBlocked)) {
+        return true; // Found alternative path
+      }
+    }
+
+    return false; // Blocking any tile on the path breaks connectivity
+  }
+
+  // Generate 10 random terrain positions ensuring at least 2 paths exist
+  function generateTerrainPositions(): { x: number; z: number }[] {
+    const maxAttempts = 100;
+
+    for (let attempt = 0; attempt < maxAttempts; attempt++) {
+      const positions: { x: number; z: number }[] = [];
+      const used = new Set(reservedPositions);
+      const testTerrain = new Set<string>();
+
+      while (positions.length < 10) {
+        const x = Math.floor(Math.random() * GRID_SIZE);
+        const z = Math.floor(Math.random() * GRID_SIZE);
+        const key = `${x},${z}`;
+
+        if (!used.has(key)) {
+          used.add(key);
+          positions.push({ x, z });
+          testTerrain.add(key);
+        }
+      }
+
+      // Validate: must have at least 2 distinct paths
+      if (hasMultiplePaths(testTerrain)) {
+        // Valid configuration - add to actual terrain set
+        for (const key of testTerrain) {
+          terrainTiles.add(key);
+        }
+        return positions;
+      }
+    }
+
+    // Fallback: return empty (no terrain) if can't find valid config
+    console.warn("Could not generate valid terrain with 2 paths, using no terrain");
+    return [];
+  }
+
+  const terrainPositions = generateTerrainPositions();
+
+  // Create terrain cube meshes
+  const terrainMaterial = new StandardMaterial("terrainMat", scene);
+  terrainMaterial.diffuseColor = new Color3(0.4, 0.35, 0.3);
+  terrainMaterial.specularColor = new Color3(0.1, 0.1, 0.1);
+
+  const tileTopY = 0.05;  // Top surface of tiles (tiles are height 0.1 centered at Y=0)
+  const terrainHeight = TILE_SIZE - TILE_GAP;
+
+  for (const { x, z } of terrainPositions) {
+    const cube = MeshBuilder.CreateBox(`terrain_${x}_${z}`, {
+      width: TILE_SIZE - TILE_GAP,
+      height: terrainHeight,
+      depth: TILE_SIZE - TILE_GAP,
+    }, scene);
+    cube.position = new Vector3(
+      x * TILE_SIZE - gridOffset,
+      tileTopY + terrainHeight / 2,  // Sit on top of tile
+      z * TILE_SIZE - gridOffset
+    );
+    cube.material = terrainMaterial;
+    cube.metadata = { type: "terrain", gridX: x, gridZ: z };
+  }
+
+  // Helper to check if a tile has terrain
+  function hasTerrain(x: number, z: number): boolean {
+    return terrainTiles.has(`${x},${z}`);
+  }
+
   // GUI
   const gui = AdvancedDynamicTexture.CreateFullscreenUI("UI");
 
@@ -360,6 +540,11 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
       // Skip checking the destination tile
       if (x === toX && z === toZ) break;
 
+      // Check if terrain blocks LOS
+      if (hasTerrain(x, z)) {
+        return false;
+      }
+
       // Check if this tile is occupied (blocking LOS), excluding the specified unit
       const occupant = units.find(u => u.gridX === x && u.gridZ === z && u.hp > 0 && u !== excludeUnit);
       if (occupant) {
@@ -376,6 +561,9 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
     for (let x = 0; x < GRID_SIZE; x++) {
       for (let z = 0; z < GRID_SIZE; z++) {
         if (x === fromX && z === fromZ) continue;
+
+        // Skip terrain tiles (no unit can stand there)
+        if (hasTerrain(x, z)) continue;
 
         const distance = Math.abs(x - fromX) + Math.abs(z - fromZ);
 
@@ -408,7 +596,8 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
     for (const dir of directions) {
       const nx = x + dir.dx;
       const nz = z + dir.dz;
-      if (nx >= 0 && nx < GRID_SIZE && nz >= 0 && nz < GRID_SIZE) {
+      // Check bounds and exclude terrain tiles
+      if (nx >= 0 && nx < GRID_SIZE && nz >= 0 && nz < GRID_SIZE && !hasTerrain(nx, nz)) {
         adjacent.push({ x: nx, z: nz });
       }
     }
@@ -479,6 +668,9 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
 
     unit.gridX = targetX;
     unit.gridZ = targetZ;
+
+    // Recalculate cover tiles for all covering units (LOS may have changed)
+    recalculateAllCoverTiles();
 
     // Play run animation
     playAnimation(unit, "Run", true);
@@ -1052,9 +1244,9 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
 
       // If within move range and not the starting tile, it's a valid destination
       if (dist > 0 && dist <= unit.moveRange) {
-        // Check if target tile is unoccupied (can't end on another unit)
+        // Check if target tile is unoccupied (can't end on another unit or terrain)
         const occupied = units.some(u => u.gridX === cx && u.gridZ === cz);
-        if (!occupied) {
+        if (!occupied && !hasTerrain(cx, cz)) {
           reachable.push({ x: cx, z: cz });
         }
       }
@@ -1062,7 +1254,7 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
       // Stop expanding if at max range
       if (dist >= unit.moveRange) continue;
 
-      // Check all 4 cardinal directions
+      // Check all 4 cardinal directions (manhattan movement)
       const directions = [[0, 1], [0, -1], [1, 0], [-1, 0]];
       for (const [dx, dz] of directions) {
         const nx = cx + dx;
@@ -1072,6 +1264,12 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
         // Skip if out of bounds or already visited
         if (nx < 0 || nx >= GRID_SIZE || nz < 0 || nz >= GRID_SIZE) continue;
         if (visited.has(key)) continue;
+
+        // Check if tile is blocked by terrain (can't pass through)
+        if (hasTerrain(nx, nz)) {
+          visited.add(key);
+          continue;
+        }
 
         // Check if tile is blocked by enemy unit (can't pass through)
         const enemyBlocking = units.some(u => u.gridX === nx && u.gridZ === nz && u.team !== unit.team);
@@ -1320,15 +1518,316 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
     consumeAction();
   }
 
-  // Cover tiles tracking for visual display
-  let coverTileMeshes: Mesh[] = [];
+  // Cover tiles tracking for visual display - per unit
+  const coverMeshesByUnit: Map<Unit, Mesh[]> = new Map();
+  // Preview meshes for pending cover actions
+  let coverPreviewMeshes: Mesh[] = [];
+  // Hazard stripe meshes for dual-covered tiles
+  let hazardStripeMeshes: Mesh[] = [];
+  // Cover tile map: tracks which tiles are covered and by which units (allows multiple)
+  // Key: "x,z", Value: array of units covering that tile
+  const coverTileMap: Map<string, Unit[]> = new Map();
+
+  // Add tiles to the cover map for a unit
+  function setCoverTiles(unit: Unit, tiles: { x: number; z: number }[]): void {
+    for (const { x, z } of tiles) {
+      const key = `${x},${z}`;
+      const existing = coverTileMap.get(key) || [];
+      if (!existing.includes(unit)) {
+        existing.push(unit);
+      }
+      coverTileMap.set(key, existing);
+    }
+  }
+
+  // Clear cover tiles for a specific unit
+  function clearCoverTilesForUnit(unit: Unit): void {
+    for (const [key, coveringUnits] of coverTileMap.entries()) {
+      const index = coveringUnits.indexOf(unit);
+      if (index !== -1) {
+        coveringUnits.splice(index, 1);
+        if (coveringUnits.length === 0) {
+          coverTileMap.delete(key);
+        }
+      }
+    }
+  }
+
+  // Get the enemy unit covering a tile (returns first enemy found, null if no enemy is covering)
+  function getEnemyCoveringTile(x: number, z: number, forUnit: Unit): Unit | null {
+    const coveringUnits = coverTileMap.get(`${x},${z}`);
+    if (!coveringUnits) return null;
+    for (const coveringUnit of coveringUnits) {
+      if (coveringUnit.team !== forUnit.team && coveringUnit.hp > 0) {
+        return coveringUnit;
+      }
+    }
+    return null;
+  }
+
+  // Check if a tile is covered by both teams
+  function isTileDualCovered(x: number, z: number): { player1Color?: Color3; player2Color?: Color3 } | null {
+    const coveringUnits = coverTileMap.get(`${x},${z}`);
+    if (!coveringUnits || coveringUnits.length < 2) return null;
+
+    let player1Color: Color3 | undefined;
+    let player2Color: Color3 | undefined;
+
+    for (const unit of coveringUnits) {
+      if (unit.team === "player1" && unit.hp > 0) {
+        player1Color = unit.teamColor;
+      } else if (unit.team === "player2" && unit.hp > 0) {
+        player2Color = unit.teamColor;
+      }
+    }
+
+    if (player1Color && player2Color) {
+      return { player1Color, player2Color };
+    }
+    return null;
+  }
+
+  // Update hazard stripes for all dual-covered tiles
+  function updateHazardStripes(): void {
+    // Clear existing hazard meshes
+    for (const mesh of hazardStripeMeshes) {
+      mesh.dispose();
+    }
+    hazardStripeMeshes = [];
+
+    // Find all dual-covered tiles and create hazard stripes
+    for (const [key] of coverTileMap.entries()) {
+      const [xStr, zStr] = key.split(",");
+      const x = parseInt(xStr);
+      const z = parseInt(zStr);
+      const dualCover = isTileDualCovered(x, z);
+      if (dualCover) {
+        createDualCoverCorners(x, z, dualCover.player1Color!, dualCover.player2Color!);
+      }
+    }
+  }
+
+  // Create corner markers for dual-covered tile (no Z-fighting)
+  function createDualCoverCorners(tileX: number, tileZ: number, color1: Color3, color2: Color3): void {
+    const cornerSize = 0.12;
+    const cornerThickness = 0.05;
+    const cornerHeight = 0.08;
+    const tileHalf = (TILE_SIZE - TILE_GAP) / 2;
+
+    const worldX = tileX * TILE_SIZE - gridOffset;
+    const worldZ = tileZ * TILE_SIZE - gridOffset;
+
+    // Create materials for both colors
+    const mat1 = new StandardMaterial(`dualMat1_${tileX}_${tileZ}`, scene);
+    mat1.diffuseColor = color1;
+    mat1.emissiveColor = color1.scale(0.7);
+    mat1.alpha = 1.0;
+
+    const mat2 = new StandardMaterial(`dualMat2_${tileX}_${tileZ}`, scene);
+    mat2.diffuseColor = color2;
+    mat2.emissiveColor = color2.scale(0.7);
+    mat2.alpha = 1.0;
+
+    // Create corner markers - alternating colors at each corner
+    // Each corner has an L-shape made of two boxes
+    const corners = [
+      { x: tileHalf, z: tileHalf, mat: mat1 },     // Top-right - color1
+      { x: -tileHalf, z: tileHalf, mat: mat2 },    // Top-left - color2
+      { x: tileHalf, z: -tileHalf, mat: mat2 },    // Bottom-right - color2
+      { x: -tileHalf, z: -tileHalf, mat: mat1 },   // Bottom-left - color1
+    ];
+
+    for (const corner of corners) {
+      // Horizontal part of L - slightly larger to cover underlying corners
+      const hBox = MeshBuilder.CreateBox(`dualCornerH_${tileX}_${tileZ}`, {
+        width: cornerSize + 0.02,
+        height: cornerHeight,
+        depth: cornerThickness + 0.01,
+      }, scene);
+      hBox.material = corner.mat;
+      hBox.position = new Vector3(
+        worldX + corner.x - Math.sign(corner.x) * cornerSize / 2,
+        0.09,  // Just above single-team corners (0.08)
+        worldZ + corner.z
+      );
+      hBox.isPickable = false;
+      hazardStripeMeshes.push(hBox);
+
+      // Vertical part of L
+      const vBox = MeshBuilder.CreateBox(`dualCornerV_${tileX}_${tileZ}`, {
+        width: cornerThickness + 0.01,
+        height: cornerHeight,
+        depth: cornerSize + 0.02,
+      }, scene);
+      vBox.material = corner.mat;
+      vBox.position = new Vector3(
+        worldX + corner.x,
+        0.09,
+        worldZ + corner.z - Math.sign(corner.z) * cornerSize / 2
+      );
+      vBox.isPickable = false;
+      hazardStripeMeshes.push(vBox);
+    }
+  }
+
+  // End cover for a unit (clears state, visualization, and map)
+  function endCover(unit: Unit): void {
+    unit.isCovering = false;
+    clearCoverTilesForUnit(unit);
+    clearCoverVisualizationForUnit(unit);
+    updateHazardStripes();  // Recalculate dual-covered tiles
+  }
+
+  // Recalculate cover tiles for all covering units (called after any movement)
+  function recalculateAllCoverTiles(): void {
+    for (const unit of units) {
+      if (!unit.isCovering || unit.hp <= 0) continue;
+
+      // Clear existing cover for this unit
+      clearCoverTilesForUnit(unit);
+      clearCoverVisualizationForUnit(unit);
+
+      // Recalculate covered tiles based on current positions
+      const isMelee = unit.customization?.combatStyle === "melee";
+      let coveredTiles: { x: number; z: number }[];
+
+      if (isMelee) {
+        coveredTiles = getAdjacentOrdinalTiles(unit.gridX, unit.gridZ);
+      } else {
+        // Gun: recalculate LOS with current unit positions
+        coveredTiles = getTilesInLOS(unit.gridX, unit.gridZ, true, unit);
+      }
+
+      // Re-add to cover map and recreate visualization
+      setCoverTiles(unit, coveredTiles);
+      for (const { x, z } of coveredTiles) {
+        createCoverBorder(unit, x, z, unit.teamColor);
+      }
+    }
+
+    // Update dual-covered tile indicators
+    updateHazardStripes();
+  }
+
+  // Clear cover visualization for a specific unit only
+  function clearCoverVisualizationForUnit(unit: Unit): void {
+    const meshes = coverMeshesByUnit.get(unit);
+    if (meshes) {
+      for (const mesh of meshes) {
+        mesh.dispose();
+      }
+      coverMeshesByUnit.delete(unit);
+    }
+  }
+
+  // Clear cover preview meshes
+  function clearCoverPreview(): void {
+    for (const mesh of coverPreviewMeshes) {
+      mesh.dispose();
+    }
+    coverPreviewMeshes = [];
+  }
+
+  // Show cover preview for pending action (semi-transparent)
+  function showCoverPreview(unit: Unit, fromX: number, fromZ: number): void {
+    clearCoverPreview();
+
+    const isMelee = unit.customization?.combatStyle === "melee";
+    let tiles: { x: number; z: number }[];
+
+    if (isMelee) {
+      tiles = getAdjacentOrdinalTiles(fromX, fromZ);
+    } else {
+      tiles = getTilesInLOS(fromX, fromZ, true, unit);
+    }
+
+    // Create preview borders (more transparent than active cover)
+    for (const { x, z } of tiles) {
+      createCoverBorderPreview(x, z, unit.teamColor);
+    }
+  }
+
+  // Create a preview border (more transparent) - uses corner style
+  function createCoverBorderPreview(tileX: number, tileZ: number, color: Color3): void {
+    const cornerSize = 0.12;
+    const cornerThickness = 0.05;
+    const cornerHeight = 0.08;
+    const tileHalf = (TILE_SIZE - TILE_GAP) / 2;
+
+    const worldX = tileX * TILE_SIZE - gridOffset;
+    const worldZ = tileZ * TILE_SIZE - gridOffset;
+
+    const cornerMat = new StandardMaterial(`coverPreviewMat_${tileX}_${tileZ}`, scene);
+    cornerMat.diffuseColor = color;
+    cornerMat.emissiveColor = color.scale(0.3);
+    cornerMat.alpha = 0.5;  // More transparent for preview
+
+    // Create L-shaped corner markers at each corner
+    const corners = [
+      { x: tileHalf, z: tileHalf },
+      { x: -tileHalf, z: tileHalf },
+      { x: tileHalf, z: -tileHalf },
+      { x: -tileHalf, z: -tileHalf },
+    ];
+
+    for (const corner of corners) {
+      const hBox = MeshBuilder.CreateBox(`coverPreviewH_${tileX}_${tileZ}`, {
+        width: cornerSize,
+        height: cornerHeight,
+        depth: cornerThickness,
+      }, scene);
+      hBox.material = cornerMat;
+      hBox.position = new Vector3(
+        worldX + corner.x - Math.sign(corner.x) * cornerSize / 2,
+        0.08,
+        worldZ + corner.z
+      );
+      hBox.isPickable = false;
+      coverPreviewMeshes.push(hBox);
+
+      const vBox = MeshBuilder.CreateBox(`coverPreviewV_${tileX}_${tileZ}`, {
+        width: cornerThickness,
+        height: cornerHeight,
+        depth: cornerSize,
+      }, scene);
+      vBox.material = cornerMat;
+      vBox.position = new Vector3(
+        worldX + corner.x,
+        0.08,
+        worldZ + corner.z - Math.sign(corner.z) * cornerSize / 2
+      );
+      vBox.isPickable = false;
+      coverPreviewMeshes.push(vBox);
+    }
+  }
+
+  // Check if a unit triggers cover reaction and execute it
+  // Returns true if cover was triggered (caller should end turn)
+  function checkAndTriggerCoverReaction(targetUnit: Unit, onComplete: () => void): boolean {
+    const coveringUnit = getEnemyCoveringTile(targetUnit.gridX, targetUnit.gridZ, targetUnit);
+    if (!coveringUnit) {
+      return false;
+    }
+
+    console.log(`${coveringUnit.team} ${coveringUnit.type} triggers Cover reaction on ${targetUnit.team} ${targetUnit.type}!`);
+
+    // Execute the cover reaction attack
+    executeAttack(coveringUnit, targetUnit, () => {
+      // End cover after reaction
+      endCover(coveringUnit);
+      onComplete();
+    });
+
+    return true;
+  }
 
   // Toggle Cover for Soldier (tank type)
   function toggleCover(unit: Unit): void {
     unit.isCovering = !unit.isCovering;
 
-    // Clear existing cover visualization
-    clearCoverVisualization();
+    // Clear existing cover for this unit only
+    clearCoverTilesForUnit(unit);
+    clearCoverVisualizationForUnit(unit);
 
     if (unit.isCovering) {
       // Get covered tiles based on weapon type
@@ -1343,13 +1842,16 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
         coveredTiles = getTilesInLOS(unit.gridX, unit.gridZ, true, unit);
       }
 
-      // Create pulsing border visualization for covered tiles
+      // Add to cover map and create visualization
+      setCoverTiles(unit, coveredTiles);
       for (const { x, z } of coveredTiles) {
-        createCoverBorder(x, z, unit.teamColor);
+        createCoverBorder(unit, x, z, unit.teamColor);
       }
+      updateHazardStripes();  // Check for dual-covered tiles
 
       console.log(`${unit.team} ${unit.type} activates Cover! (${coveredTiles.length} tiles)`);
     } else {
+      updateHazardStripes();  // Update after deactivation
       console.log(`${unit.team} ${unit.type} deactivates Cover.`);
     }
 
@@ -1376,48 +1878,75 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
     consumeAction();
   }
 
-  function createCoverBorder(tileX: number, tileZ: number, color: Color3): void {
-    const borderThickness = 0.04;
-    const borderHeight = 0.05;
+  function createCoverBorder(unit: Unit, tileX: number, tileZ: number, color: Color3): void {
+    const cornerSize = 0.12;
+    const cornerThickness = 0.05;
+    const cornerHeight = 0.08;
     const tileHalf = (TILE_SIZE - TILE_GAP) / 2;
 
     const worldX = tileX * TILE_SIZE - gridOffset;
     const worldZ = tileZ * TILE_SIZE - gridOffset;
 
-    const borderMat = new StandardMaterial(`coverBorderMat_${tileX}_${tileZ}`, scene);
-    borderMat.diffuseColor = color;
-    borderMat.emissiveColor = color.scale(0.6);
-    borderMat.alpha = 0.8;
+    const cornerMat = new StandardMaterial(`coverCornerMat_${unit.team}_${tileX}_${tileZ}`, scene);
+    cornerMat.diffuseColor = color;
+    cornerMat.emissiveColor = color.scale(0.7);
+    cornerMat.alpha = 1.0;
 
-    // Create 4 border edges
-    const edges = [
-      { width: TILE_SIZE - TILE_GAP, depth: borderThickness, offsetX: 0, offsetZ: tileHalf },
-      { width: TILE_SIZE - TILE_GAP, depth: borderThickness, offsetX: 0, offsetZ: -tileHalf },
-      { width: borderThickness, depth: TILE_SIZE - TILE_GAP, offsetX: tileHalf, offsetZ: 0 },
-      { width: borderThickness, depth: TILE_SIZE - TILE_GAP, offsetX: -tileHalf, offsetZ: 0 },
+    // Get or create mesh array for this unit
+    if (!coverMeshesByUnit.has(unit)) {
+      coverMeshesByUnit.set(unit, []);
+    }
+    const unitMeshes = coverMeshesByUnit.get(unit)!;
+
+    // Create L-shaped corner markers at each corner
+    const corners = [
+      { x: tileHalf, z: tileHalf },     // Top-right
+      { x: -tileHalf, z: tileHalf },    // Top-left
+      { x: tileHalf, z: -tileHalf },    // Bottom-right
+      { x: -tileHalf, z: -tileHalf },   // Bottom-left
     ];
 
-    for (const edge of edges) {
-      const borderMesh = MeshBuilder.CreateBox(`coverBorder_${tileX}_${tileZ}`, {
-        width: edge.width,
-        height: borderHeight,
-        depth: edge.depth,
+    for (const corner of corners) {
+      // Horizontal part of L
+      const hBox = MeshBuilder.CreateBox(`coverCornerH_${tileX}_${tileZ}`, {
+        width: cornerSize,
+        height: cornerHeight,
+        depth: cornerThickness,
       }, scene);
-      borderMesh.material = borderMat;
-      borderMesh.position = new Vector3(
-        worldX + edge.offsetX,
+      hBox.material = cornerMat;
+      hBox.position = new Vector3(
+        worldX + corner.x - Math.sign(corner.x) * cornerSize / 2,
         0.08,
-        worldZ + edge.offsetZ
+        worldZ + corner.z
       );
-      coverTileMeshes.push(borderMesh);
+      hBox.isPickable = false;
+      unitMeshes.push(hBox);
+
+      // Vertical part of L
+      const vBox = MeshBuilder.CreateBox(`coverCornerV_${tileX}_${tileZ}`, {
+        width: cornerThickness,
+        height: cornerHeight,
+        depth: cornerSize,
+      }, scene);
+      vBox.material = cornerMat;
+      vBox.position = new Vector3(
+        worldX + corner.x,
+        0.08,
+        worldZ + corner.z - Math.sign(corner.z) * cornerSize / 2
+      );
+      vBox.isPickable = false;
+      unitMeshes.push(vBox);
     }
   }
 
+  // Clear ALL cover visualizations (for all units)
   function clearCoverVisualization(): void {
-    for (const mesh of coverTileMeshes) {
-      mesh.dispose();
+    for (const [_unit, meshes] of coverMeshesByUnit.entries()) {
+      for (const mesh of meshes) {
+        mesh.dispose();
+      }
     }
-    coverTileMeshes = [];
+    coverMeshesByUnit.clear();
   }
 
   function isValidMove(x: number, z: number): boolean {
@@ -1640,6 +2169,9 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
     // Consume an action (for UI display)
     turnState.actionsRemaining--;
 
+    // Update cover preview if there's a pending cover action
+    updateCoverPreview();
+
     // Clear move highlights
     clearHighlights();
     currentActionMode = "none";
@@ -1735,11 +2267,39 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
     // Consume an action
     turnState.actionsRemaining--;
 
+    // Show cover preview from effective position (considering pending moves)
+    updateCoverPreview();
+
     // Update intent indicators (blue for self-buff)
     updateIntentIndicators();
 
     // Update menu to show queued action
     updateCommandMenu();
+  }
+
+  // Update cover preview based on pending actions
+  function updateCoverPreview(): void {
+    clearCoverPreview();
+    if (!turnState) return;
+
+    // Find if there's a pending cover action
+    const coverAction = turnState.pendingActions.find(a => a.type === "ability" && a.abilityName === "cover");
+    if (!coverAction) return;
+
+    const unit = turnState.unit;
+
+    // Find the final position (last move in queue, or current position)
+    let finalX = unit.gridX;
+    let finalZ = unit.gridZ;
+    for (const action of turnState.pendingActions) {
+      if (action.type === "move" && action.targetX !== undefined && action.targetZ !== undefined) {
+        finalX = action.targetX;
+        finalZ = action.targetZ;
+      }
+    }
+
+    // Show preview at final position
+    showCoverPreview(unit, finalX, finalZ);
   }
 
   // Execute all queued actions sequentially
@@ -1756,7 +2316,27 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
     clearShadowPreview();
     clearAttackPreview();
     clearIntentIndicators();
+    clearCoverPreview();
     shadowPosition = null;
+
+    // Helper to check cover reaction after an action completes
+    // If cover is triggered, ends turn immediately; otherwise continues to next action
+    function afterActionWithCoverCheck(nextIndex: number): void {
+      // Check if the acting unit is in a covered tile
+      if (unit.hp > 0) {  // Only check if unit is still alive
+        const coverTriggered = checkAndTriggerCoverReaction(unit, () => {
+          // Cover reaction complete - end turn immediately (skip remaining actions)
+          faceClosestEnemy(unit);
+          isExecutingActions = false;
+          endCurrentUnitTurn();
+        });
+        if (coverTriggered) {
+          return; // Cover reaction is handling the turn end
+        }
+      }
+      // No cover triggered, continue to next action
+      processNextAction(nextIndex);
+    }
 
     function processNextAction(index: number): void {
       if (index >= actions.length) {
@@ -1772,7 +2352,7 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
         // Execute move with animation
         animateMovement(unit, action.targetX, action.targetZ, () => {
           updateCornerIndicators(unit);
-          processNextAction(index + 1);
+          afterActionWithCoverCheck(index + 1);
         });
       } else if (action.type === "attack" && action.targetUnit) {
         // Check if target is still alive (may have been killed by previous action)
@@ -1782,23 +2362,32 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
         }
         // Execute attack
         executeAttack(unit, action.targetUnit, () => {
-          processNextAction(index + 1);
+          afterActionWithCoverCheck(index + 1);
         });
       } else if (action.type === "ability" && action.abilityName === "heal" && action.targetUnit) {
         // Execute heal
         executeHeal(unit, action.targetUnit, () => {
-          processNextAction(index + 1);
+          afterActionWithCoverCheck(index + 1);
         });
       } else if (action.type === "ability" && action.abilityName === "conceal") {
         // Execute conceal
         executeConceal(unit, () => {
-          processNextAction(index + 1);
+          afterActionWithCoverCheck(index + 1);
         });
       } else if (action.type === "ability" && action.abilityName === "cover") {
-        // Execute cover
+        // Execute cover - find final position from any remaining move actions
+        let finalX = unit.gridX;
+        let finalZ = unit.gridZ;
+        for (let i = index + 1; i < actions.length; i++) {
+          const futureAction = actions[i];
+          if (futureAction.type === "move" && futureAction.targetX !== undefined && futureAction.targetZ !== undefined) {
+            finalX = futureAction.targetX;
+            finalZ = futureAction.targetZ;
+          }
+        }
         executeCover(unit, () => {
-          processNextAction(index + 1);
-        });
+          afterActionWithCoverCheck(index + 1);
+        }, finalX, finalZ);
       } else {
         // Unknown action, skip
         processNextAction(index + 1);
@@ -1859,8 +2448,7 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
       if (defender.hp <= 0) {
         console.log(`${defender.team} ${defender.type} was defeated!`);
         if (defender.isCovering) {
-          defender.isCovering = false;
-          clearCoverVisualization();
+          endCover(defender);
         }
 
         playAnimation(defender, "Death", false, () => {
@@ -1971,11 +2559,18 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
   }
 
   // Execute cover ability (called during execution phase)
-  function executeCover(unit: Unit, onComplete: () => void): void {
+  // fromX/fromZ allow specifying a different position (e.g., if there's a pending move after cover)
+  function executeCover(unit: Unit, onComplete: () => void, fromX?: number, fromZ?: number): void {
     unit.isCovering = !unit.isCovering;
 
-    // Clear existing cover visualization
-    clearCoverVisualization();
+    // Clear existing cover for this unit only
+    clearCoverTilesForUnit(unit);
+    clearCoverVisualizationForUnit(unit);
+    clearCoverPreview();  // Clear any pending preview
+
+    // Use provided position or current position
+    const coverX = fromX ?? unit.gridX;
+    const coverZ = fromZ ?? unit.gridZ;
 
     if (unit.isCovering) {
       // Get covered tiles based on weapon type
@@ -1984,19 +2579,22 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
 
       if (isMelee) {
         // Sword: Cover all 4 adjacent ordinal tiles
-        coveredTiles = getAdjacentOrdinalTiles(unit.gridX, unit.gridZ);
+        coveredTiles = getAdjacentOrdinalTiles(coverX, coverZ);
       } else {
         // Gun: Cover all tiles in LOS that they could shoot (not adjacent)
-        coveredTiles = getTilesInLOS(unit.gridX, unit.gridZ, true, unit);
+        coveredTiles = getTilesInLOS(coverX, coverZ, true, unit);
       }
 
-      // Create pulsing border visualization for covered tiles
+      // Add to cover map and create visualization
+      setCoverTiles(unit, coveredTiles);
       for (const { x, z } of coveredTiles) {
-        createCoverBorder(x, z, unit.teamColor);
+        createCoverBorder(unit, x, z, unit.teamColor);
       }
+      updateHazardStripes();  // Check for dual-covered tiles
 
       console.log(`${unit.team} ${unit.type} activates Cover! (${coveredTiles.length} tiles)`);
     } else {
+      updateHazardStripes();  // Update after deactivation
       console.log(`${unit.team} ${unit.type} deactivates Cover.`);
     }
 
@@ -2031,10 +2629,16 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
     const lastAction = turnState.pendingActions.pop();
     turnState.actionsRemaining++;
 
-    // If it was a move, clear the shadow preview
+    // If it was a move, clear the shadow preview and update cover preview
     if (lastAction?.type === "move") {
       clearShadowPreview();
       shadowPosition = null;
+      updateCoverPreview();  // Update in case cover depends on position
+    }
+
+    // If it was a cover action, clear the cover preview
+    if (lastAction?.type === "ability" && lastAction.abilityName === "cover") {
+      clearCoverPreview();
     }
 
     // Update intent indicators to reflect remaining actions
