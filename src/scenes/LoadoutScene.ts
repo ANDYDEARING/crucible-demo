@@ -23,7 +23,7 @@ import {
   Control,
   Image,
 } from "@babylonjs/gui";
-import { UNIT_INFO, Loadout, UnitSelection, SupportCustomization, UnitType } from "../types";
+import { ALL_CLASSES, getClassData, Loadout, UnitSelection, UnitCustomization, UnitClass } from "../types";
 
 // Color palette options
 const SKIN_TONES = [
@@ -177,17 +177,15 @@ export function createLoadoutScene(
     return new Color3(r, g, b);
   }
 
-  function updatePreview(preview: UnitPreview | undefined, c: SupportCustomization, classType: UnitType | null): void {
-    if (!preview || !classType) return;
+  function updatePreview(preview: UnitPreview | undefined, c: UnitCustomization, unitClass: UnitClass | null): void {
+    if (!preview || !unitClass) return;
 
-    // Determine which class models to use
-    const classKey = classType === "tank" ? "soldier" : classType === "damage" ? "operator" : "medic";
-    const classModels = preview[classKey];
+    // Get models for the selected class
+    const classModels = preview[unitClass];
 
     // Hide all models from other classes
-    const allClasses: Array<"soldier" | "operator" | "medic"> = ["soldier", "operator", "medic"];
-    for (const key of allClasses) {
-      if (key !== classKey) {
+    for (const key of ALL_CLASSES) {
+      if (key !== unitClass) {
         preview[key].male.root.setEnabled(false);
         preview[key].female.root.setEnabled(false);
         preview[key].male.animationGroups.forEach(ag => ag.stop());
@@ -689,10 +687,9 @@ export function createLoadoutScene(
         selectionArray.length = 0;
 
         // Generate 3 random units
-        const unitTypes: UnitType[] = ["tank", "damage", "support"];
         for (let i = 0; i < 3; i++) {
-          const randomType = unitTypes[Math.floor(Math.random() * unitTypes.length)];
-          const randomCustomization: SupportCustomization = {
+          const randomClass = ALL_CLASSES[Math.floor(Math.random() * ALL_CLASSES.length)];
+          const randomCustomization: UnitCustomization = {
             body: Math.random() > 0.5 ? "male" : "female",
             combatStyle: Math.random() > 0.5 ? "ranged" : "melee",
             handedness: Math.random() > 0.5 ? "right" : "left",
@@ -702,7 +699,7 @@ export function createLoadoutScene(
             skinTone: Math.floor(Math.random() * SKIN_TONES.length),
           };
           selectionArray.push({
-            type: randomType,
+            unitClass: randomClass,
             customization: randomCustomization,
           });
         }
@@ -726,7 +723,7 @@ export function createLoadoutScene(
         selectionDisplay.text = "Selected: (choose 3)";
         selectionDisplay.color = "#ff6666";
       } else {
-        const names = selectionArray.map(u => UNIT_INFO[u.type].name);
+        const names = selectionArray.map(u => getClassData(u.unitClass).name);
         selectionDisplay.text = `Selected: ${names.join(", ")}`;
         selectionDisplay.color = selectionArray.length === 3 ? "#44ff44" : "#ff6666";
       }
@@ -742,10 +739,10 @@ export function createLoadoutScene(
     container.addControl(classButtonRow, 3, 0);
 
     // Track which class is currently selected for customization
-    let selectedClass: UnitType | null = null;
+    let selectedClass: UnitClass | null = null;
 
     // Current customization state
-    const currentCustomization: SupportCustomization = {
+    const currentCustomization: UnitCustomization = {
       body: "male",
       combatStyle: "ranged",
       handedness: "right",
@@ -889,13 +886,13 @@ export function createLoadoutScene(
       let ability = "";
       let weapon = "";
 
-      if (selectedClass === "tank") {
+      if (selectedClass === "soldier") {
         fluff = `Soldiers are the backbone of settlement defense. Drawn from Earth's militaries and security forces, they volunteered to protect humanity's last hope. Where others see danger, ${pronoun} sees a perimeter to hold.`;
         ability = `[COVER]\nWhen activated, if an enemy ends their move within attack range, the Soldier strikes first with a devastating counter attack.`;
-      } else if (selectedClass === "damage") {
+      } else if (selectedClass === "operator") {
         fluff = `Operators work beyond the settlement walls where survival demands cunning over strength. Whether scouting hostile terrain or eliminating threats before they reach the settlement, ${pronoun} is the unseen blade that keeps the settlement safe.`;
         ability = `[CONCEAL]\nWhen activated, the next incoming hit is completely negated, allowing ${pronounObj} to survive otherwise fatal encounters.`;
-      } else if (selectedClass === "support") {
+      } else if (selectedClass === "medic") {
         fluff = `In a settlement where every life is precious, Medics are revered. Trained in both trauma care and combat medicine, ${pronoun} keeps the team fighting when the odds turn grim.`;
         ability = `[HEAL]\nSelect self or an ally to restore HP. The difference between victory and defeat often comes down to keeping the right person standing.`;
       }
@@ -1034,8 +1031,8 @@ export function createLoadoutScene(
     addBtn.onPointerClickObservable.add(() => {
       if (selectionArray.length < 3 && selectedClass) {
         selectionArray.push({
-          type: selectedClass,
-          customization: { ...currentCustomization }  // Apply customization to all unit types
+          unitClass: selectedClass,
+          customization: { ...currentCustomization }
         });
         updateSelectionDisplay();
         updateStartButton();
@@ -1047,13 +1044,13 @@ export function createLoadoutScene(
     rightCol.addControl(addBtn, 1, 0);
 
     // Function to open customization for a class
-    const openCustomization = (classType: UnitType): void => {
-      selectedClass = classType;
-      const info = UNIT_INFO[classType];
-      classTitle.text = info.name.toUpperCase();
+    const openCustomization = (unitClass: UnitClass): void => {
+      selectedClass = unitClass;
+      const classData = getClassData(unitClass);
+      classTitle.text = classData.name.toUpperCase();
       // Update button text through textBlock property
       const btnText = addBtn.textBlock;
-      if (btnText) btnText.text = `+ Add ${info.name}`;
+      if (btnText) btnText.text = `+ Add ${classData.name}`;
       customPanel.isVisible = true;
       updateDescription();
       // Show the correct model for the selected class
@@ -1061,11 +1058,11 @@ export function createLoadoutScene(
     };
 
     // Create class buttons
-    const classTypes: UnitType[] = ["tank", "damage", "support"];
     const classButtons: Button[] = [];
 
-    classTypes.forEach((classType, index) => {
-      const btn = Button.CreateSimpleButton(`${playerName}_${classType}`, UNIT_INFO[classType].name);
+    ALL_CLASSES.forEach((unitClass, index) => {
+      const classData = getClassData(unitClass);
+      const btn = Button.CreateSimpleButton(`${playerName}_${unitClass}`, classData.name);
       btn.width = "95%";
       btn.height = "35px";
       btn.color = "white";
@@ -1073,8 +1070,7 @@ export function createLoadoutScene(
       btn.cornerRadius = 5;
       btn.fontSize = 13;
       btn.onPointerEnterObservable.add(() => {
-        const info = UNIT_INFO[classType];
-        infoText.text = `${info.name}: HP ${info.hp} | ATK ${info.attack} | Move ${info.moveRange} | Range ${info.attackRange}`;
+        infoText.text = `${classData.name}: HP ${classData.hp} | ATK ${classData.attack} | Move ${classData.moveRange} | Range ${classData.attackRange}`;
         infoText.color = "white";
       });
       btn.onPointerOutObservable.add(() => {
@@ -1083,7 +1079,7 @@ export function createLoadoutScene(
       });
       btn.onPointerClickObservable.add(() => {
         if (selectionArray.length < 3) {
-          openCustomization(classType);
+          openCustomization(unitClass);
         }
       });
       classButtons.push(btn);

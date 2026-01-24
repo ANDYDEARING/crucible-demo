@@ -1,11 +1,11 @@
-export type UnitType = "tank" | "damage" | "support";
-export type WeaponType = "gun" | "sword";
+// Class identifiers
+export type UnitClass = "soldier" | "operator" | "medic";
 
 export type BodyType = "male" | "female";
 export type CombatStyle = "melee" | "ranged";
 export type Handedness = "right" | "left";
 
-export interface SupportCustomization {
+export interface UnitCustomization {
   body: BodyType;
   combatStyle: CombatStyle;
   handedness: Handedness;
@@ -16,8 +16,8 @@ export interface SupportCustomization {
 }
 
 export interface UnitSelection {
-  type: UnitType;
-  customization?: SupportCustomization;
+  unitClass: UnitClass;
+  customization?: UnitCustomization;
 }
 
 export interface Loadout {
@@ -27,29 +27,63 @@ export interface Loadout {
   player2TeamColor?: string;  // hex color for player 2 team
 }
 
-export const UNIT_INFO: Record<UnitType, { name: string; hp: number; attack: number; moveRange: number; attackRange: number; description: string }> = {
-  tank: {
+// Class data with stats (unified for now, will balance later)
+export interface ClassData {
+  id: UnitClass;
+  name: string;
+  description: string;
+  hp: number;
+  attack: number;
+  moveRange: number;
+  attackRange: number;
+  healAmount: number;
+  ability: string;
+  modelFile: string;  // base filename without gender suffix
+}
+
+export const CLASS_DATA: Record<UnitClass, ClassData> = {
+  soldier: {
+    id: "soldier",
     name: "Soldier",
-    hp: 100,
-    attack: 15,
-    moveRange: 2,
-    attackRange: 1,
-    description: "High HP, low damage. Gets in the enemy's face."
-  },
-  damage: {
-    name: "Operator",
-    hp: 50,
-    attack: 30,
-    moveRange: 4,
-    attackRange: 2,
-    description: "Glass cannon. Fast and deadly, but fragile."
-  },
-  support: {
-    name: "Medic",
-    hp: 60,
-    attack: 10,
+    description: "Frontline fighter. Uses Cover to protect allies.",
+    hp: 75,
+    attack: 20,
     moveRange: 3,
-    attackRange: 3,
-    description: "Can heal allies OR attack. Choose wisely each turn."
-  }
+    attackRange: 2,
+    healAmount: 0,
+    ability: "Cover",
+    modelFile: "soldier",
+  },
+  operator: {
+    id: "operator",
+    name: "Operator",
+    description: "Stealth specialist. Uses Conceal to avoid damage.",
+    hp: 75,
+    attack: 20,
+    moveRange: 3,
+    attackRange: 2,
+    healAmount: 0,
+    ability: "Conceal",
+    modelFile: "operator",
+  },
+  medic: {
+    id: "medic",
+    name: "Medic",
+    description: "Support unit. Can heal allies or attack.",
+    hp: 75,
+    attack: 20,
+    moveRange: 3,
+    attackRange: 2,
+    healAmount: 25,
+    ability: "Heal",
+    modelFile: "medic",
+  },
 };
+
+// Get all class IDs
+export const ALL_CLASSES: UnitClass[] = ["soldier", "operator", "medic"];
+
+// Helper to get class data
+export function getClassData(unitClass: UnitClass): ClassData {
+  return CLASS_DATA[unitClass];
+}

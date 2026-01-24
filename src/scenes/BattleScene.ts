@@ -17,7 +17,7 @@ import {
 } from "@babylonjs/core";
 import "@babylonjs/loaders/glTF";
 import { AdvancedDynamicTexture, TextBlock, Button, Rectangle, StackPanel, Grid, Control } from "@babylonjs/gui";
-import type { Loadout, UnitType, UnitSelection, SupportCustomization } from "../types";
+import { type Loadout, type UnitSelection, type UnitCustomization, type UnitClass, getClassData } from "../types";
 
 // Color palettes (same as LoadoutScene)
 const SKIN_TONES = [
@@ -44,12 +44,6 @@ function hexToColor3(hex: string): Color3 {
 const GRID_SIZE = 8;
 const TILE_SIZE = 1;
 const TILE_GAP = 0.05;
-
-const UNIT_STATS = {
-  tank: { hp: 100, attack: 15, moveRange: 2, attackRange: 1, healAmount: 0 },
-  damage: { hp: 50, attack: 30, moveRange: 4, attackRange: 2, healAmount: 0 },
-  support: { hp: 60, attack: 10, moveRange: 3, attackRange: 3, healAmount: 25 },
-};
 
 type Team = "player1" | "player2";
 type ActionMode = "none" | "move" | "attack" | "ability";
@@ -81,7 +75,7 @@ interface FacingConfig {
 
 interface Unit {
   mesh: Mesh;
-  type: "tank" | "damage" | "support";
+  unitClass: UnitClass;
   team: Team;
   gridX: number;
   gridZ: number;
@@ -106,7 +100,7 @@ interface Unit {
   modelRoot?: AbstractMesh;
   modelMeshes?: AbstractMesh[];
   animationGroups?: AnimationGroup[];
-  customization?: SupportCustomization;
+  customization?: UnitCustomization;
   teamColor: Color3;
   // Facing system
   facing: FacingConfig;
@@ -187,10 +181,10 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
   const healableMaterial = new StandardMaterial("healableMat", scene);
   healableMaterial.diffuseColor = new Color3(0.3, 0.9, 0.5);
 
-  const unitMaterials = {
-    tank: createUnitMaterial("tank", new Color3(0.3, 0.3, 0.8), scene),
-    damage: createUnitMaterial("damage", new Color3(0.8, 0.2, 0.2), scene),
-    support: createUnitMaterial("support", new Color3(0.2, 0.8, 0.3), scene),
+  const unitMaterials: Record<UnitClass, StandardMaterial> = {
+    soldier: createUnitMaterial("soldier", new Color3(0.3, 0.3, 0.8), scene),
+    operator: createUnitMaterial("operator", new Color3(0.8, 0.2, 0.2), scene),
+    medic: createUnitMaterial("medic", new Color3(0.2, 0.8, 0.3), scene),
   };
 
   // Create grid
@@ -416,7 +410,7 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
   function playAnimation(unit: Unit, animName: string, loop: boolean, onComplete?: () => void): void {
     if (!unit.animationGroups) {
       // No animation groups - call onComplete immediately
-      console.warn(`No animation groups for ${unit.type}`);
+      console.warn(`No animation groups for ${unit.unitClass}`);
       if (onComplete) onComplete();
       return;
     }
@@ -432,7 +426,7 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
       }
     } else {
       // Animation not found - call onComplete immediately so game doesn't hang
-      console.warn(`Animation "${animName}" not found for ${unit.type}. Available: ${unit.animationGroups.map(ag => ag.name).join(", ")}`);
+      console.warn(`Animation "${animName}" not found for ${unit.unitClass}. Available: ${unit.animationGroups.map(ag => ag.name).join(", ")}`);
       if (onComplete) onComplete();
     }
   }
@@ -464,9 +458,11 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
   }
 
   // Face a specific grid position
-  function faceTarget(unit: Unit, targetX: number, targetZ: number): void {
-    const dx = targetX - unit.gridX;
-    const dz = targetZ - unit.gridZ;
+  function faceTarget(unit: Unit, targetX: number, targetZ: number, fromX?: number, fromZ?: number): void {
+    const startX = fromX ?? unit.gridX;
+    const startZ = fromZ ?? unit.gridZ;
+    const dx = targetX - startX;
+    const dz = targetZ - startZ;
     if (dx === 0 && dz === 0) return;
     unit.facing.currentAngle = Math.atan2(dx, dz);
     applyFacing(unit);
@@ -503,8 +499,8 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
   }
 
   // Legacy alias for compatibility
-  function setUnitFacing(unit: Unit, targetX: number, targetZ: number): void {
-    faceTarget(unit, targetX, targetZ);
+  function setUnitFacing(unit: Unit, targetX: number, targetZ: number, fromX?: number, fromZ?: number): void {
+    faceTarget(unit, targetX, targetZ, fromX, fromZ);
   }
 
   // ============================================
@@ -527,18 +523,36 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
 
     while (x !== toX || z !== toZ) {
       const e2 = 2 * err;
+      const prevX = x;
+      const prevZ = z;
+
+      let movedX = false;
+      let movedZ = false;
 
       if (e2 > -dz) {
         err -= dz;
         x += sx;
+        movedX = true;
       }
       if (e2 < dx) {
         err += dx;
         z += sz;
+        movedZ = true;
       }
 
       // Skip checking the destination tile
       if (x === toX && z === toZ) break;
+
+      // If moving diagonally, check both adjacent tiles to prevent corner-cutting
+      // A diagonal move from (prevX,prevZ) to (x,z) passes between (x,prevZ) and (prevX,z)
+      if (movedX && movedZ) {
+        // Check if both corner tiles are blocked (can't see through diagonal gap)
+        const corner1Blocked = hasTerrain(x, prevZ) || units.some(u => u.gridX === x && u.gridZ === prevZ && u.hp > 0 && u !== excludeUnit);
+        const corner2Blocked = hasTerrain(prevX, z) || units.some(u => u.gridX === prevX && u.gridZ === z && u.hp > 0 && u !== excludeUnit);
+        if (corner1Blocked && corner2Blocked) {
+          return false;
+        }
+      }
 
       // Check if terrain blocks LOS
       if (hasTerrain(x, z)) {
@@ -658,59 +672,96 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
       return;
     }
 
-    isAnimatingMovement = true;
-    setUnitFacing(unit, targetX, targetZ);
+    // Get the actual path to follow (avoiding terrain)
+    const path = getPathToTarget(unit, unit.gridX, unit.gridZ, targetX, targetZ);
 
-    const startX = unit.gridX * TILE_SIZE - gridOffset;
-    const startZ = unit.gridZ * TILE_SIZE - gridOffset;
-    const endX = targetX * TILE_SIZE - gridOffset;
-    const endZ = targetZ * TILE_SIZE - gridOffset;
-
+    // Update logical position immediately
     unit.gridX = targetX;
     unit.gridZ = targetZ;
 
     // Recalculate cover tiles for all covering units (LOS may have changed)
     recalculateAllCoverTiles();
 
-    // Play run animation
+    // If path is just start and end (adjacent move), do simple animation
+    if (path.length <= 2) {
+      animateAlongPath(unit, path, onComplete);
+      return;
+    }
+
+    // Animate along the path waypoints
+    animateAlongPath(unit, path, onComplete);
+  }
+
+  function animateAlongPath(unit: Unit, path: { x: number; z: number }[], onComplete?: () => void): void {
+    if (path.length < 2) {
+      onComplete?.();
+      return;
+    }
+
+    isAnimatingMovement = true;
     playAnimation(unit, "Run", true);
 
-    // Animate over time
-    const duration = 0.8;  // seconds (doubled for better visibility)
-    let elapsed = 0;
+    let currentWaypointIndex = 0;
+    const durationPerTile = 0.3; // seconds per tile
+    let segmentElapsed = 0;
+
+    // Set initial facing toward first waypoint (from start position)
+    if (path.length > 1) {
+      setUnitFacing(unit, path[1].x, path[1].z, path[0].x, path[0].z);
+    }
 
     const moveObserver = scene.onBeforeRenderObservable.add(() => {
-      elapsed += engine.getDeltaTime() / 1000;
-      const t = Math.min(elapsed / duration, 1);
+      const deltaTime = engine.getDeltaTime() / 1000;
+      segmentElapsed += deltaTime;
 
-      // Smooth interpolation
-      const easeT = t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2;
+      const fromWaypoint = path[currentWaypointIndex];
+      const toWaypoint = path[currentWaypointIndex + 1];
 
-      const currentX = startX + (endX - startX) * easeT;
-      const currentZ = startZ + (endZ - startZ) * easeT;
+      const fromWorldX = fromWaypoint.x * TILE_SIZE - gridOffset;
+      const fromWorldZ = fromWaypoint.z * TILE_SIZE - gridOffset;
+      const toWorldX = toWaypoint.x * TILE_SIZE - gridOffset;
+      const toWorldZ = toWaypoint.z * TILE_SIZE - gridOffset;
 
-      // Update all mesh positions
+      const t = Math.min(segmentElapsed / durationPerTile, 1);
+      const easeT = t; // Linear for smooth path following
+
+      const currentX = fromWorldX + (toWorldX - fromWorldX) * easeT;
+      const currentZ = fromWorldZ + (toWorldZ - fromWorldZ) * easeT;
+
       unit.modelRoot!.position.x = currentX;
       unit.modelRoot!.position.z = currentZ;
       unit.mesh.position.x = currentX;
       unit.mesh.position.z = currentZ;
 
+      // Move to next waypoint
       if (t >= 1) {
-        scene.onBeforeRenderObservable.remove(moveObserver);
-        isAnimatingMovement = false;
+        currentWaypointIndex++;
+        segmentElapsed = 0;
 
-        // Snap to final position
-        const finalX = endX;
-        const finalZ = endZ;
-        unit.modelRoot!.position.x = finalX;
-        unit.modelRoot!.position.z = finalZ;
-        unit.mesh.position.x = finalX;
-        unit.mesh.position.z = finalZ;
+        // Update facing for next segment (from current waypoint to next)
+        if (currentWaypointIndex + 1 < path.length) {
+          const currentWp = path[currentWaypointIndex];
+          const nextWp = path[currentWaypointIndex + 1];
+          setUnitFacing(unit, nextWp.x, nextWp.z, currentWp.x, currentWp.z);
+        }
 
-        // Return to idle
-        playIdleAnimation(unit);
+        // Check if we've reached the end
+        if (currentWaypointIndex >= path.length - 1) {
+          scene.onBeforeRenderObservable.remove(moveObserver);
+          isAnimatingMovement = false;
 
-        onComplete?.();
+          // Snap to final position
+          const finalWaypoint = path[path.length - 1];
+          const finalX = finalWaypoint.x * TILE_SIZE - gridOffset;
+          const finalZ = finalWaypoint.z * TILE_SIZE - gridOffset;
+          unit.modelRoot!.position.x = finalX;
+          unit.modelRoot!.position.z = finalZ;
+          unit.mesh.position.x = finalX;
+          unit.mesh.position.z = finalZ;
+
+          playIdleAnimation(unit);
+          onComplete?.();
+        }
       }
     });
   }
@@ -869,7 +920,7 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
   ];
 
   // Use loadout if provided, otherwise default setup
-  const defaultUnits: UnitSelection[] = [{ type: "tank" }, { type: "damage" }, { type: "support" }];
+  const defaultUnits: UnitSelection[] = [{ unitClass: "soldier" }, { unitClass: "operator" }, { unitClass: "medic" }];
   const player1Selections = loadout?.player1 ?? defaultUnits;
   const player2Selections = loadout?.player2 ?? defaultUnits;
 
@@ -888,7 +939,7 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
       const pos = player1Positions[i];
       const selection = player1Selections[i];
       const unit = await createUnit(
-        selection.type,
+        selection.unitClass,
         "player1",
         pos.x,
         pos.z,
@@ -908,7 +959,7 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
       const pos = player2Positions[i];
       const selection = player2Selections[i];
       const unit = await createUnit(
-        selection.type,
+        selection.unitClass,
         "player2",
         pos.x,
         pos.z,
@@ -1286,6 +1337,61 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
     return reachable;
   }
 
+  // Compute the actual path from start to target using BFS
+  function getPathToTarget(unit: Unit, fromX: number, fromZ: number, toX: number, toZ: number): { x: number; z: number }[] {
+    // BFS to find shortest path
+    const visited = new Set<string>();
+    const parent = new Map<string, string | null>();
+
+    const queue: [number, number][] = [[fromX, fromZ]];
+    const startKey = `${fromX},${fromZ}`;
+    visited.add(startKey);
+    parent.set(startKey, null);
+
+    while (queue.length > 0) {
+      const [cx, cz] = queue.shift()!;
+      const currentKey = `${cx},${cz}`;
+
+      // Found target
+      if (cx === toX && cz === toZ) {
+        // Reconstruct path
+        const path: { x: number; z: number }[] = [];
+        let key: string | null = currentKey;
+        while (key) {
+          const [x, z] = key.split(",").map(Number);
+          path.unshift({ x, z });
+          key = parent.get(key) || null;
+        }
+        return path;
+      }
+
+      // Check cardinal directions
+      const directions = [[0, 1], [0, -1], [1, 0], [-1, 0]];
+      for (const [dx, dz] of directions) {
+        const nx = cx + dx;
+        const nz = cz + dz;
+        const key = `${nx},${nz}`;
+
+        if (nx < 0 || nx >= GRID_SIZE || nz < 0 || nz >= GRID_SIZE) continue;
+        if (visited.has(key)) continue;
+
+        // Check terrain blocking
+        if (hasTerrain(nx, nz)) continue;
+
+        // Check enemy blocking
+        const enemyBlocking = units.some(u => u.gridX === nx && u.gridZ === nz && u.team !== unit.team && u.hp > 0);
+        if (enemyBlocking) continue;
+
+        visited.add(key);
+        parent.set(key, currentKey);
+        queue.push([nx, nz]);
+      }
+    }
+
+    // No path found, return direct path (shouldn't happen if target is valid)
+    return [{ x: fromX, z: fromZ }, { x: toX, z: toZ }];
+  }
+
   function getAttackableEnemies(unit: Unit, fromX?: number, fromZ?: number): Unit[] {
     if (!hasActionsRemaining()) return []; // No actions remaining
     // Use shadow position if pending move, otherwise use provided or current position
@@ -1481,7 +1587,7 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
         });
       }
 
-      console.log(`${unit.team} ${unit.type} activates Conceal!`);
+      console.log(`${unit.team} ${unit.unitClass} activates Conceal!`);
     } else {
       // Restore full visibility
       if (unit.modelMeshes) {
@@ -1492,7 +1598,7 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
         });
       }
 
-      console.log(`${unit.team} ${unit.type} deactivates Conceal.`);
+      console.log(`${unit.team} ${unit.unitClass} deactivates Conceal.`);
     }
 
     // Play interact animation
@@ -1809,7 +1915,7 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
       return false;
     }
 
-    console.log(`${coveringUnit.team} ${coveringUnit.type} triggers Cover reaction on ${targetUnit.team} ${targetUnit.type}!`);
+    console.log(`${coveringUnit.team} ${coveringUnit.unitClass} triggers Cover reaction on ${targetUnit.team} ${targetUnit.unitClass}!`);
 
     // Execute the cover reaction attack
     executeAttack(coveringUnit, targetUnit, () => {
@@ -1849,10 +1955,10 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
       }
       updateHazardStripes();  // Check for dual-covered tiles
 
-      console.log(`${unit.team} ${unit.type} activates Cover! (${coveredTiles.length} tiles)`);
+      console.log(`${unit.team} ${unit.unitClass} activates Cover! (${coveredTiles.length} tiles)`);
     } else {
       updateHazardStripes();  // Update after deactivation
-      console.log(`${unit.team} ${unit.type} deactivates Cover.`);
+      console.log(`${unit.team} ${unit.unitClass} deactivates Cover.`);
     }
 
     // Play interact animation
@@ -2090,7 +2196,7 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
     const b = Math.round(currentUnit.teamColor.b * 255).toString(16).padStart(2, '0');
     const teamColorHex = `#${r}${g}${b}`;
 
-    const unitName = currentUnit.type.charAt(0).toUpperCase() + currentUnit.type.slice(1);
+    const unitName = getClassData(currentUnit.unitClass).name;
     const speedInfo = `(Spd: ${getEffectiveSpeed(currentUnit).toFixed(1)})`;
     turnText.text = `${teamName}'s ${unitName} ${speedInfo}`;
     turnText.color = teamColorHex;
@@ -2423,10 +2529,10 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
             }
           });
         }
-        console.log(`${defender.team} ${defender.type}'s Conceal was broken! Damage negated!`);
-        if (attacker.type === "support") playSfx(sfx.hitLight);
-        else if (attacker.type === "tank") playSfx(sfx.hitMedium);
-        else if (attacker.type === "damage") playSfx(sfx.hitHeavy);
+        console.log(`${defender.team} ${defender.unitClass}'s Conceal was broken! Damage negated!`);
+        if (attacker.unitClass === "medic") playSfx(sfx.hitLight);
+        else if (attacker.unitClass === "soldier") playSfx(sfx.hitMedium);
+        else if (attacker.unitClass === "operator") playSfx(sfx.hitHeavy);
 
         playAnimation(defender, "HitRecieve", false, () => {
           playIdleAnimation(defender);
@@ -2437,19 +2543,22 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
 
       // Apply damage
       defender.hp -= attacker.attack;
-      console.log(`${attacker.team} ${attacker.type} attacks ${defender.team} ${defender.type} for ${attacker.attack} damage! (${defender.hp}/${defender.maxHp} HP)`);
+      console.log(`${attacker.team} ${attacker.unitClass} attacks ${defender.team} ${defender.unitClass} for ${attacker.attack} damage! (${defender.hp}/${defender.maxHp} HP)`);
 
-      if (attacker.type === "support") playSfx(sfx.hitLight);
-      else if (attacker.type === "tank") playSfx(sfx.hitMedium);
-      else if (attacker.type === "damage") playSfx(sfx.hitHeavy);
+      if (attacker.unitClass === "medic") playSfx(sfx.hitLight);
+      else if (attacker.unitClass === "soldier") playSfx(sfx.hitMedium);
+      else if (attacker.unitClass === "operator") playSfx(sfx.hitHeavy);
 
       updateHpBar(defender);
 
+      // Cancel cover when hit (even if surviving)
+      if (defender.isCovering) {
+        console.log(`${defender.team} ${defender.unitClass}'s Cover is broken by being hit!`);
+        endCover(defender);
+      }
+
       if (defender.hp <= 0) {
-        console.log(`${defender.team} ${defender.type} was defeated!`);
-        if (defender.isCovering) {
-          endCover(defender);
-        }
+        console.log(`${defender.team} ${defender.unitClass} was defeated!`);
 
         playAnimation(defender, "Death", false, () => {
           defender.mesh.dispose();
@@ -2502,7 +2611,7 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
 
     const healedAmount = Math.min(healer.healAmount, target.maxHp - target.hp);
     target.hp += healedAmount;
-    console.log(`${healer.team} ${healer.type} heals ${target.team} ${target.type} for ${healedAmount} HP! (${target.hp}/${target.maxHp} HP)`);
+    console.log(`${healer.team} ${healer.unitClass} heals ${target.team} ${target.unitClass} for ${healedAmount} HP! (${target.hp}/${target.maxHp} HP)`);
 
     playSfx(sfx.heal);
     updateHpBar(target);
@@ -2521,7 +2630,7 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
           }
         });
       }
-      console.log(`${unit.team} ${unit.type} activates Conceal!`);
+      console.log(`${unit.team} ${unit.unitClass} activates Conceal!`);
     } else {
       // Restore full visibility
       if (unit.modelMeshes) {
@@ -2531,7 +2640,7 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
           }
         });
       }
-      console.log(`${unit.team} ${unit.type} deactivates Conceal.`);
+      console.log(`${unit.team} ${unit.unitClass} deactivates Conceal.`);
     }
 
     // Play interact animation
@@ -2592,10 +2701,10 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
       }
       updateHazardStripes();  // Check for dual-covered tiles
 
-      console.log(`${unit.team} ${unit.type} activates Cover! (${coveredTiles.length} tiles)`);
+      console.log(`${unit.team} ${unit.unitClass} activates Cover! (${coveredTiles.length} tiles)`);
     } else {
       updateHazardStripes();  // Update after deactivation
-      console.log(`${unit.team} ${unit.type} deactivates Cover.`);
+      console.log(`${unit.team} ${unit.unitClass} deactivates Cover.`);
     }
 
     // Play interact animation
@@ -2890,15 +2999,15 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
   abilityBtn.fontSize = 14;
   abilityBtn.onPointerClickObservable.add(() => {
     if (currentUnit && !isAnimatingMovement && hasActionsRemaining()) {
-      if (currentUnit.type === "support") {
+      if (currentUnit.unitClass === "medic") {
         // Heal mode - highlight healable allies
         currentActionMode = "ability";
         selectedUnit = currentUnit;
         highlightHealTargets(currentUnit);
-      } else if (currentUnit.type === "damage") {
+      } else if (currentUnit.unitClass === "operator") {
         // Conceal - queue as action
         queueConcealAction(currentUnit);
-      } else if (currentUnit.type === "tank") {
+      } else if (currentUnit.unitClass === "soldier") {
         // Cover - queue as action
         queueCoverAction(currentUnit);
       }
@@ -3011,22 +3120,13 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
     const b = Math.round(currentUnit.teamColor.b * 255).toString(16).padStart(2, '0');
     commandMenu.color = `#${r}${g}${b}`;
 
-    // Update unit name
-    const unitNames: Record<string, string> = {
-      tank: "SOLDIER",
-      damage: "OPERATOR",
-      support: "MEDIC"
-    };
-    menuUnitName.text = unitNames[currentUnit.type] || currentUnit.type.toUpperCase();
+    // Update unit name from class data
+    const classData = getClassData(currentUnit.unitClass);
+    menuUnitName.text = classData.name.toUpperCase();
 
-    // Update ability button based on unit type
-    const abilityNames: Record<string, string> = {
-      tank: "Cover",
-      damage: "Conceal",
-      support: "Heal"
-    };
+    // Update ability button from class data
     if (abilityBtn.textBlock) {
-      abilityBtn.textBlock.text = abilityNames[currentUnit.type] || "Ability";
+      abilityBtn.textBlock.text = classData.ability;
     }
 
     // Update actions text from turnState
@@ -3052,10 +3152,10 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
         if (action.type === "move") {
           lines.push(`  Move to (${action.targetX},${action.targetZ})`);
         } else if (action.type === "attack" && action.targetUnit) {
-          const targetName = action.targetUnit.type.charAt(0).toUpperCase() + action.targetUnit.type.slice(1);
+          const targetName = getClassData(action.targetUnit.unitClass).name;
           lines.push(`  Attack ${targetName}`);
         } else if (action.type === "ability" && action.abilityName === "heal" && action.targetUnit) {
-          const targetName = action.targetUnit === currentUnit ? "self" : action.targetUnit.type;
+          const targetName = action.targetUnit === currentUnit ? "self" : getClassData(action.targetUnit.unitClass).name;
           lines.push(`  Heal ${targetName}`);
         } else if (action.type === "ability" && action.abilityName === "conceal") {
           lines.push(`  Conceal`);
@@ -3097,32 +3197,29 @@ function createUnitMaterial(name: string, color: Color3, scene: Scene): Standard
 }
 
 // Map unit types to model file names
-function getModelFileName(type: UnitType, isMale: boolean): string {
+function getModelFileName(unitClass: UnitClass, isMale: boolean): string {
   const gender = isMale ? "m" : "f";
-  switch (type) {
-    case "tank": return `soldier_${gender}.glb`;
-    case "damage": return `operator_${gender}.glb`;
-    case "support": return `medic_${gender}.glb`;
-  }
+  const classData = getClassData(unitClass);
+  return `${classData.modelFile}_${gender}.glb`;
 }
 
 async function createUnit(
-  type: "tank" | "damage" | "support",
+  unitClass: UnitClass,
   team: Team,
   gridX: number,
   gridZ: number,
   scene: Scene,
-  _materials: Record<string, StandardMaterial>,  // Kept for API compatibility
+  _materials: Record<UnitClass, StandardMaterial>,  // Kept for API compatibility
   gridOffset: number,
   gui: AdvancedDynamicTexture,
   loadoutIndex: number,
   teamColor: Color3,
-  customization?: SupportCustomization
+  customization?: UnitCustomization
 ): Promise<Unit> {
-  const stats = UNIT_STATS[type];
+  const classData = getClassData(unitClass);
 
   // Default customization if not provided
-  const c: SupportCustomization = customization ?? {
+  const c: UnitCustomization = customization ?? {
     body: "male",
     combatStyle: "ranged",
     handedness: "right",
@@ -3134,7 +3231,7 @@ async function createUnit(
 
   // Load 3D model
   const isMale = c.body === "male";
-  const modelFile = getModelFileName(type, isMale);
+  const modelFile = getModelFileName(unitClass, isMale);
   const result = await SceneLoader.ImportMeshAsync("", "/models/", modelFile, scene);
 
   const modelRoot = result.meshes[0];
@@ -3191,7 +3288,7 @@ async function createUnit(
 
   // Set metadata for click detection
   modelMeshes.forEach(mesh => {
-    mesh.metadata = { type: "unit", unitType: type, team };
+    mesh.metadata = { type: "unit", unitClass, team };
   });
 
   // Start idle animation
@@ -3202,14 +3299,14 @@ async function createUnit(
   idleAnim?.start(true);
 
   // Create an invisible mesh for HP bar linkage (positioned at model's head height)
-  const hpBarAnchor = MeshBuilder.CreateBox(`${team}_${type}_anchor_${gridX}_${gridZ}`, { size: 0.01 }, scene);
+  const hpBarAnchor = MeshBuilder.CreateBox(`${team}_${unitClass}_anchor_${gridX}_${gridZ}`, { size: 0.01 }, scene);
   hpBarAnchor.position = new Vector3(
     gridX * TILE_SIZE - gridOffset,
     1.2,  // Approximate head height
     gridZ * TILE_SIZE - gridOffset
   );
   hpBarAnchor.isVisible = false;
-  hpBarAnchor.metadata = { type: "unit", unitType: type, team };
+  hpBarAnchor.metadata = { type: "unit", unitClass, team };
 
   // HP bar background
   const hpBarBg = new Rectangle();
@@ -3236,16 +3333,16 @@ async function createUnit(
 
   return {
     mesh: hpBarAnchor,  // Use anchor as the main "mesh" for positioning
-    type,
+    unitClass,
     team,
     gridX,
     gridZ,
-    moveRange: stats.moveRange,
-    attackRange: stats.attackRange,
-    hp: stats.hp,
-    maxHp: stats.hp,
-    attack: stats.attack,
-    healAmount: stats.healAmount,
+    moveRange: classData.moveRange,
+    attackRange: classData.attackRange,
+    hp: classData.hp,
+    maxHp: classData.hp,
+    attack: classData.attack,
+    healAmount: classData.healAmount,
     hpBar,
     hpBarBg,
     originalColor,
