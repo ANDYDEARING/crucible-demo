@@ -898,9 +898,9 @@ export function createLoadoutScene(
       }
 
       if (isMelee) {
-        weapon = `[MELEE]\nDeals 2x damage. Attacks in ordinal directions, one space away within line of sight. Best for holding chokepoints.`;
+        weapon = `[MELEE]\nDeals 2x damage. Attacks all 8 adjacent spaces within line of sight. Best for holding chokepoints.`;
       } else {
-        weapon = `[RANGED]\nAttacks anywhere within line of sight, except adjacent ordinal spaces. Optimal for controlling the battlefield from a distance.`;
+        weapon = `[RANGED]\nAttacks anywhere within line of sight, except the 8 adjacent spaces. Optimal for controlling the battlefield from a distance.`;
       }
 
       descriptionText.text = `${fluff}\n\n${ability}\n\n${weapon}`;

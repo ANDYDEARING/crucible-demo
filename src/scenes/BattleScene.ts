@@ -524,64 +524,160 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
   // ============================================
   // LINE OF SIGHT SYSTEM
   // ============================================
+  // Mathematical line-rectangle intersection approach:
+  // - Line from center of fromTile to center of toTile
+  // - If line passes through interior of any blocking tile → blocked
+  // - If line only grazes corners, track which side of the line blockers are on
+  // - If corners are touched on BOTH sides (left and right) → blocked
 
-  function hasLineOfSight(fromX: number, fromZ: number, toX: number, toZ: number, excludeUnit?: Unit): boolean {
-    // Bresenham's line algorithm to check tiles between from and to
-    // Returns false if any occupied tile (other than start/end) blocks the line
-    // excludeUnit: optionally exclude a specific unit from blocking (usually the shooter)
+  // Epsilon for floating point comparisons
+  const LOS_EPSILON = 0.0001;
 
-    const dx = Math.abs(toX - fromX);
-    const dz = Math.abs(toZ - fromZ);
-    const sx = fromX < toX ? 1 : -1;
-    const sz = fromZ < toZ ? 1 : -1;
-    let err = dx - dz;
+  // Check if a line segment intersects a tile's interior (not just corner)
+  // Returns: "none" | "interior" | "corner"
+  function lineRectIntersection(
+    ax: number, az: number,  // Line start (tile centers)
+    bx: number, bz: number,  // Line end (tile centers)
+    tileX: number, tileZ: number  // Tile grid coordinates
+  ): "none" | "interior" | "corner" {
+    // Tile bounds (each tile is 1x1, from [tileX, tileX+1] x [tileZ, tileZ+1])
+    const minX = tileX;
+    const maxX = tileX + 1;
+    const minZ = tileZ;
+    const maxZ = tileZ + 1;
 
-    let x = fromX;
-    let z = fromZ;
+    // Line direction
+    const dx = bx - ax;
+    const dz = bz - az;
 
-    while (x !== toX || z !== toZ) {
-      const e2 = 2 * err;
-      const prevX = x;
-      const prevZ = z;
+    // Parametric line clipping (Liang-Barsky algorithm)
+    let tMin = 0;
+    let tMax = 1;
 
-      let movedX = false;
-      let movedZ = false;
+    // Check each edge
+    const edges = [
+      { p: -dx, q: ax - minX },  // Left edge
+      { p: dx, q: maxX - ax },   // Right edge
+      { p: -dz, q: az - minZ },  // Bottom edge
+      { p: dz, q: maxZ - az },   // Top edge
+    ];
 
-      if (e2 > -dz) {
-        err -= dz;
-        x += sx;
-        movedX = true;
-      }
-      if (e2 < dx) {
-        err += dx;
-        z += sz;
-        movedZ = true;
-      }
-
-      // If moving diagonally, check both adjacent tiles to prevent corner-cutting
-      // A diagonal move from (prevX,prevZ) to (x,z) passes between (x,prevZ) and (prevX,z)
-      // This check must happen BEFORE the destination break to catch diagonal shots to adjacent tiles
-      if (movedX && movedZ) {
-        // Check if both corner tiles are blocked (can't see through diagonal gap)
-        const corner1Blocked = hasTerrain(x, prevZ) || units.some(u => u.gridX === x && u.gridZ === prevZ && u.hp > 0 && u !== excludeUnit);
-        const corner2Blocked = hasTerrain(prevX, z) || units.some(u => u.gridX === prevX && u.gridZ === z && u.hp > 0 && u !== excludeUnit);
-        if (corner1Blocked && corner2Blocked) {
-          return false;
+    for (const { p, q } of edges) {
+      if (Math.abs(p) < LOS_EPSILON) {
+        // Line is parallel to this edge
+        if (q < 0) return "none";  // Line is outside
+      } else {
+        const t = q / p;
+        if (p < 0) {
+          tMin = Math.max(tMin, t);
+        } else {
+          tMax = Math.min(tMax, t);
         }
       }
+    }
 
-      // Skip checking the destination tile (but corner check above still applies)
-      if (x === toX && z === toZ) break;
+    if (tMin > tMax + LOS_EPSILON) {
+      return "none";  // No intersection
+    }
 
-      // Check if terrain blocks LOS
-      if (hasTerrain(x, z)) {
-        return false;
+    // Calculate intersection points
+    const entryX = ax + tMin * dx;
+    const entryZ = az + tMin * dz;
+    const exitX = ax + tMax * dx;
+    const exitZ = az + tMax * dz;
+
+    // Check if entry and exit are essentially the same point (corner touch)
+    const intersectionLength = Math.sqrt((exitX - entryX) ** 2 + (exitZ - entryZ) ** 2);
+    if (intersectionLength < LOS_EPSILON) {
+      // Single point intersection - check if it's a corner
+      const corners = [
+        { x: minX, z: minZ },
+        { x: minX, z: maxZ },
+        { x: maxX, z: minZ },
+        { x: maxX, z: maxZ },
+      ];
+      for (const corner of corners) {
+        if (Math.abs(entryX - corner.x) < LOS_EPSILON && Math.abs(entryZ - corner.z) < LOS_EPSILON) {
+          return "corner";
+        }
       }
+      // Edge touch (not corner) - treat as interior for blocking purposes
+      return "interior";
+    }
 
-      // Check if this tile is occupied (blocking LOS), excluding the specified unit
-      const occupant = units.find(u => u.gridX === x && u.gridZ === z && u.hp > 0 && u !== excludeUnit);
-      if (occupant) {
-        return false;
+    return "interior";
+  }
+
+  // Determine which side of the line a point is on
+  // Returns positive for left, negative for right, 0 for on line
+  function sideOfLine(
+    ax: number, az: number,  // Line start
+    bx: number, bz: number,  // Line end
+    px: number, pz: number   // Point to test
+  ): number {
+    // 2D cross product: (B-A) × (P-A)
+    return (bx - ax) * (pz - az) - (bz - az) * (px - ax);
+  }
+
+  function hasLineOfSight(fromX: number, fromZ: number, toX: number, toZ: number, excludeUnit?: Unit): boolean {
+    // Line from center of fromTile to center of toTile
+    const ax = fromX + 0.5;
+    const az = fromZ + 0.5;
+    const bx = toX + 0.5;
+    const bz = toZ + 0.5;
+
+    // Track TERRAIN corner touches on each side of the line
+    // Only terrain blocks diagonals - units on corners don't block
+    let leftTerrainCorner = false;
+    let rightTerrainCorner = false;
+
+    // Get bounding box of tiles to check (expanded by 1 to catch edge cases)
+    const minTileX = Math.max(0, Math.min(fromX, toX) - 1);
+    const maxTileX = Math.min(GRID_SIZE - 1, Math.max(fromX, toX) + 1);
+    const minTileZ = Math.max(0, Math.min(fromZ, toZ) - 1);
+    const maxTileZ = Math.min(GRID_SIZE - 1, Math.max(fromZ, toZ) + 1);
+
+    // Check all potentially blocking tiles in the bounding box
+    for (let tileX = minTileX; tileX <= maxTileX; tileX++) {
+      for (let tileZ = minTileZ; tileZ <= maxTileZ; tileZ++) {
+        // Skip start and end tiles
+        if ((tileX === fromX && tileZ === fromZ) || (tileX === toX && tileZ === toZ)) {
+          continue;
+        }
+
+        const isTerrain = hasTerrain(tileX, tileZ);
+        const hasUnit = units.some(u => u.gridX === tileX && u.gridZ === tileZ && u.hp > 0 && u !== excludeUnit);
+
+        if (!isTerrain && !hasUnit) continue;
+
+        // Check intersection type
+        const intersection = lineRectIntersection(ax, az, bx, bz, tileX, tileZ);
+
+        if (intersection === "interior") {
+          return false;  // Blocked by interior intersection (terrain or unit)
+        }
+
+        if (intersection === "corner" && isTerrain) {
+          // Only terrain matters for corner blocking
+          const tileCenterX = tileX + 0.5;
+          const tileCenterZ = tileZ + 0.5;
+          const side = sideOfLine(ax, az, bx, bz, tileCenterX, tileCenterZ);
+
+          if (side > LOS_EPSILON) {
+            leftTerrainCorner = true;
+          } else if (side < -LOS_EPSILON) {
+            rightTerrainCorner = true;
+          }
+          // If side ≈ 0, terrain center is on the line (rare edge case, treat as blocking)
+          else {
+            return false;
+          }
+
+          // If terrain on both sides touches corners, LOS is blocked
+          if (leftTerrainCorner && rightTerrainCorner) {
+            return false;
+          }
+        }
       }
     }
 
@@ -616,14 +712,18 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
   // WEAPON RANGE HELPERS
   // ============================================
 
-  function getAdjacentOrdinalTiles(x: number, z: number): { x: number; z: number }[] {
-    // Only N, S, E, W - not diagonals
+  // Get all 8 adjacent tiles (including diagonals)
+  function getAdjacentTiles(x: number, z: number): { x: number; z: number }[] {
     const adjacent: { x: number; z: number }[] = [];
     const directions = [
       { dx: 0, dz: 1 },   // North
       { dx: 0, dz: -1 },  // South
       { dx: 1, dz: 0 },   // East
       { dx: -1, dz: 0 },  // West
+      { dx: 1, dz: 1 },   // NE
+      { dx: -1, dz: 1 },  // NW
+      { dx: 1, dz: -1 },  // SE
+      { dx: -1, dz: -1 }, // SW
     ];
 
     for (const dir of directions) {
@@ -638,27 +738,36 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
     return adjacent;
   }
 
+  // Check if a tile is adjacent (including diagonals)
+  function isAdjacent(x1: number, z1: number, x2: number, z2: number): boolean {
+    const dx = Math.abs(x2 - x1);
+    const dz = Math.abs(z2 - z1);
+    return dx <= 1 && dz <= 1 && !(dx === 0 && dz === 0);
+  }
+
   function getValidAttackTiles(unit: Unit, fromX?: number, fromZ?: number): { x: number; z: number; hasLOS: boolean }[] {
     const x = fromX ?? unit.gridX;
     const z = fromZ ?? unit.gridZ;
     const isMelee = unit.customization?.combatStyle === "melee";
 
     if (isMelee) {
-      // Sword: adjacent ordinal only
-      return getAdjacentOrdinalTiles(x, z).map(tile => ({
-        ...tile,
-        hasLOS: true  // Always has LOS for adjacent
-      }));
+      // Sword: all 8 adjacent tiles, with LOS check for diagonals
+      return getAdjacentTiles(x, z).map(tile => {
+        const isDiagonal = tile.x !== x && tile.z !== z;
+        // Diagonals need LOS check, ordinals always have LOS
+        const hasLOS = isDiagonal ? hasLineOfSight(x, z, tile.x, tile.z, unit) : true;
+        return { ...tile, hasLOS };
+      });
     } else {
-      // Gun: LOS but not adjacent
+      // Gun: LOS but not adjacent (all 8 surrounding tiles excluded)
       const losResult: { x: number; z: number; hasLOS: boolean }[] = [];
 
       for (let tx = 0; tx < GRID_SIZE; tx++) {
         for (let tz = 0; tz < GRID_SIZE; tz++) {
           if (tx === x && tz === z) continue;
 
-          const distance = Math.abs(tx - x) + Math.abs(tz - z);
-          if (distance === 1) continue;  // Skip adjacent
+          // Skip all 8 adjacent tiles
+          if (isAdjacent(x, z, tx, tz)) continue;
 
           // Exclude the shooter from blocking their own LOS
           const hasLOS = hasLineOfSight(x, z, tx, tz, unit);
@@ -1235,7 +1344,7 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
     // Calculate speed bonus based on unused actions
     // Each unused action gives +0.5 speed bonus for next turn
     const unusedActions = turnState?.actionsRemaining ?? 0;
-    unit.speedBonus = unusedActions * 0.5;
+    unit.speedBonus = unusedActions * 0.25;
 
     // Clear turn state
     turnState = null;
@@ -1826,7 +1935,11 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
       let coveredTiles: { x: number; z: number }[];
 
       if (isMelee) {
-        coveredTiles = getAdjacentOrdinalTiles(unit.gridX, unit.gridZ);
+        // Sword: Cover all 8 adjacent tiles with LOS check for diagonals
+        coveredTiles = getAdjacentTiles(unit.gridX, unit.gridZ).filter(tile => {
+          const isDiagonal = tile.x !== unit.gridX && tile.z !== unit.gridZ;
+          return !isDiagonal || hasLineOfSight(unit.gridX, unit.gridZ, tile.x, tile.z, unit);
+        });
       } else {
         // Gun: recalculate LOS with current unit positions
         coveredTiles = getTilesInLOS(unit.gridX, unit.gridZ, true, unit);
@@ -1870,7 +1983,11 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
     let tiles: { x: number; z: number }[];
 
     if (isMelee) {
-      tiles = getAdjacentOrdinalTiles(fromX, fromZ);
+      // Sword: Cover all 8 adjacent tiles with LOS check for diagonals
+      tiles = getAdjacentTiles(fromX, fromZ).filter(tile => {
+        const isDiagonal = tile.x !== fromX && tile.z !== fromZ;
+        return !isDiagonal || hasLineOfSight(fromX, fromZ, tile.x, tile.z, unit);
+      });
     } else {
       tiles = getTilesInLOS(fromX, fromZ, true, unit);
     }
@@ -1975,8 +2092,11 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
       let coveredTiles: { x: number; z: number }[];
 
       if (isMelee) {
-        // Sword: Cover all 4 adjacent ordinal tiles
-        coveredTiles = getAdjacentOrdinalTiles(unit.gridX, unit.gridZ);
+        // Sword: Cover all 8 adjacent tiles with LOS check for diagonals
+        coveredTiles = getAdjacentTiles(unit.gridX, unit.gridZ).filter(tile => {
+          const isDiagonal = tile.x !== unit.gridX && tile.z !== unit.gridZ;
+          return !isDiagonal || hasLineOfSight(unit.gridX, unit.gridZ, tile.x, tile.z, unit);
+        });
       } else {
         // Gun: Cover all tiles in LOS that they could shoot (not adjacent)
         coveredTiles = getTilesInLOS(unit.gridX, unit.gridZ, true, unit);
@@ -2711,8 +2831,11 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
       let coveredTiles: { x: number; z: number }[];
 
       if (isMelee) {
-        // Sword: Cover all 4 adjacent ordinal tiles
-        coveredTiles = getAdjacentOrdinalTiles(coverX, coverZ);
+        // Sword: Cover all 8 adjacent tiles with LOS check for diagonals
+        coveredTiles = getAdjacentTiles(coverX, coverZ).filter(tile => {
+          const isDiagonal = tile.x !== coverX && tile.z !== coverZ;
+          return !isDiagonal || hasLineOfSight(coverX, coverZ, tile.x, tile.z, unit);
+        });
       } else {
         // Gun: Cover all tiles in LOS that they could shoot (not adjacent)
         coveredTiles = getTilesInLOS(coverX, coverZ, true, unit);
