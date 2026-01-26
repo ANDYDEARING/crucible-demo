@@ -3622,6 +3622,12 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
       return;
     }
 
+    // Hide menu for AI-controlled units
+    if (controllerManager.isAI(currentUnit.team)) {
+      commandMenu.isVisible = false;
+      return;
+    }
+
     commandMenu.isVisible = true;
 
     // Position menu based on team (P1 = left, P2 = right)

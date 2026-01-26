@@ -11,6 +11,7 @@ import {
   getValidMoveTiles,
   getAttackableEnemies,
   getHealableAllies,
+  checkWinCondition,
 } from "./rules";
 
 // =============================================================================
@@ -149,16 +150,20 @@ export class AIController implements Controller {
   private think(context: ControllerContext): void {
     const { state, unit } = context;
 
-    // Simple AI logic - can be expanded based on difficulty
+    // Check if game is already over
+    const gameStatus = checkWinCondition(state);
+    if (gameStatus.isOver) {
+      return; // Don't act if game is over
+    }
+
     let actionsUsed = 0;
     const maxActions = context.actionsRemaining;
 
-    // Priority: Attack > Heal > Ability > Move
+    // Plan all actions for this turn
     while (actionsUsed < maxActions) {
-      const action = this.chooseBestAction(state, unit, actionsUsed);
+      const action = this.chooseBestAction(state, unit, actionsUsed, maxActions);
 
       if (!action) {
-        // No good action found, end turn
         break;
       }
 
@@ -171,8 +176,11 @@ export class AIController implements Controller {
           unit.gridX = action.targetX;
           unit.gridZ = action.targetZ;
         }
+        // Track conceal state
+        if (action.type === "conceal") {
+          unit.isConcealed = true;
+        }
       } else {
-        // Command rejected, try something else or end turn
         break;
       }
     }
@@ -186,78 +194,333 @@ export class AIController implements Controller {
   private chooseBestAction(
     state: BattleState,
     unit: UnitState,
-    actionsUsed: number
+    actionsUsed: number,
+    maxActions: number
   ): BattleCommand | null {
     const enemies = getAttackableEnemies(state, unit);
-    const healTargets = getHealableAllies(state, unit);
     const moveTiles = getValidMoveTiles(state, unit);
     const enemyTeam = unit.team === "player1" ? "player2" : "player1";
     const allEnemies = state.units.filter(u => u.team === enemyTeam && u.hp > 0);
-    const allAllies = state.units.filter(u => u.team === unit.team && u.hp > 0 && u.id !== unit.id);
     const isMelee = unit.combatStyle === "melee";
-    const isMedic = unit.unitClass === "medic";
+    const actionsLeft = maxActions - actionsUsed;
 
-    // === MEDIC SPECIAL BEHAVIOR ===
-    if (isMedic) {
-      // Medics prioritize safety and healing
+    // === GENERAL OVERRIDE: Can we kill an enemy within our remaining actions? ===
+    const killOpportunity = this.findKillOpportunity(state, unit, actionsLeft, enemies, moveTiles, allEnemies);
+    if (killOpportunity) {
+      return killOpportunity;
+    }
 
-      // If can kill an enemy in one hit, take the shot
-      const oneHitKills = enemies.filter(e => e.hp <= unit.attack);
-      if (oneHitKills.length > 0) {
-        const target = this.selectAttackTarget(oneHitKills);
-        return { type: "attack", targetUnitId: target.id };
+    // === CLASS-SPECIFIC BEHAVIOR ===
+    switch (unit.unitClass) {
+      case "operator":
+        return this.operatorBehavior(state, unit, actionsUsed, enemies, moveTiles, allEnemies, isMelee);
+
+      case "soldier":
+        return this.soldierBehavior(state, unit, actionsUsed, enemies, moveTiles, allEnemies, isMelee);
+
+      case "medic":
+        return this.medicBehavior(state, unit, actionsUsed, actionsLeft, enemies, moveTiles, allEnemies);
+
+      default:
+        return null;
+    }
+  }
+
+  private findKillOpportunity(
+    state: BattleState,
+    unit: UnitState,
+    actionsLeft: number,
+    currentEnemies: UnitState[],
+    moveTiles: { x: number; z: number }[],
+    _allEnemies: UnitState[]
+  ): BattleCommand | null {
+    const isMelee = unit.combatStyle === "melee";
+    const damage = isMelee ? unit.attack * 2 : unit.attack; // Melee does 2x damage
+
+    // Can kill from current position?
+    for (const enemy of currentEnemies) {
+      if (enemy.hp <= damage) {
+        return { type: "attack", targetUnitId: enemy.id };
       }
-
-      // If allies need healing, heal them
-      if (healTargets.length > 0) {
-        const target = this.selectHealTarget(healTargets);
-        return { type: "heal", targetUnitId: target.id };
+      // Can kill with 2 attacks?
+      if (actionsLeft >= 2 && enemy.hp <= damage * 2) {
+        return { type: "attack", targetUnitId: enemy.id };
       }
+    }
 
-      // If no allies left, fight
-      if (allAllies.length === 0 && enemies.length > 0) {
+    // Can move and kill?
+    if (actionsLeft >= 2 && moveTiles.length > 0) {
+      for (const tile of moveTiles) {
+        const simulatedUnit = { ...unit, gridX: tile.x, gridZ: tile.z };
+        const enemiesFromTile = getAttackableEnemies(state, simulatedUnit);
+        for (const enemy of enemiesFromTile) {
+          if (enemy.hp <= damage) {
+            return { type: "move", targetX: tile.x, targetZ: tile.z };
+          }
+        }
+      }
+    }
+
+    return null;
+  }
+
+  private operatorBehavior(
+    state: BattleState,
+    unit: UnitState,
+    _actionsUsed: number,
+    enemies: UnitState[],
+    moveTiles: { x: number; z: number }[],
+    allEnemies: UnitState[],
+    isMelee: boolean
+  ): BattleCommand | null {
+    // Operator: Get conceal before doing anything else
+    if (!unit.isConcealed) {
+      return { type: "conceal" };
+    }
+
+    // Already concealed, proceed with combat
+    if (isMelee) {
+      // Melee Operative: try to get in melee range, if there, strike
+      if (enemies.length > 0) {
         const target = this.selectAttackTarget(enemies);
         return { type: "attack", targetUnitId: target.id };
       }
-
-      // Otherwise stay put (don't advance toward enemies)
-      return null;
+      // Move toward enemies
+      if (moveTiles.length > 0 && allEnemies.length > 0) {
+        const bestMove = this.selectMoveTowardEnemy(unit, moveTiles, allEnemies, true);
+        if (bestMove) {
+          return { type: "move", targetX: bestMove.x, targetZ: bestMove.z };
+        }
+      }
+    } else {
+      // Ranged Operative: shoot twice if possible, or move+shoot, or move+move
+      if (enemies.length > 0) {
+        const target = this.selectAttackTarget(enemies);
+        return { type: "attack", targetUnitId: target.id };
+      }
+      // No targets - move to get targets
+      if (moveTiles.length > 0 && allEnemies.length > 0) {
+        const bestMove = this.selectMoveForRanged(state, unit, moveTiles, allEnemies);
+        if (bestMove) {
+          return { type: "move", targetX: bestMove.x, targetZ: bestMove.z };
+        }
+        // No shot possible even after move - just move closer
+        const closeMove = this.selectMoveTowardEnemy(unit, moveTiles, allEnemies, true);
+        if (closeMove) {
+          return { type: "move", targetX: closeMove.x, targetZ: closeMove.z };
+        }
+      }
     }
 
-    // === COMBAT UNITS (Soldier/Operator) ===
+    return null;
+  }
 
-    // If we can attack, do it
+  private soldierBehavior(
+    state: BattleState,
+    unit: UnitState,
+    actionsUsed: number,
+    enemies: UnitState[],
+    moveTiles: { x: number; z: number }[],
+    allEnemies: UnitState[],
+    isMelee: boolean
+  ): BattleCommand | null {
+    // Soldier: attack if possible
     if (enemies.length > 0) {
       const target = this.selectAttackTarget(enemies);
       return { type: "attack", targetUnitId: target.id };
     }
 
-    // Melee units: move to close distance if no enemies in range
-    if (isMelee && moveTiles.length > 0 && allEnemies.length > 0) {
-      const bestMove = this.selectMoveTowardEnemy(unit, moveTiles, allEnemies, true);
-      if (bestMove) {
-        return { type: "move", targetX: bestMove.x, targetZ: bestMove.z };
+    // No targets - try to move
+    if (moveTiles.length > 0 && allEnemies.length > 0) {
+      if (isMelee) {
+        const bestMove = this.selectMoveTowardEnemy(unit, moveTiles, allEnemies, true);
+        if (bestMove) {
+          // Check if we'll have targets after moving
+          const simulatedUnit = { ...unit, gridX: bestMove.x, gridZ: bestMove.z };
+          const enemiesAfterMove = getAttackableEnemies(state, simulatedUnit);
+          if (enemiesAfterMove.length > 0 || actionsUsed === 0) {
+            return { type: "move", targetX: bestMove.x, targetZ: bestMove.z };
+          }
+        }
+      } else {
+        const bestMove = this.selectMoveForRanged(state, unit, moveTiles, allEnemies);
+        if (bestMove) {
+          return { type: "move", targetX: bestMove.x, targetZ: bestMove.z };
+        }
       }
     }
 
-    // Ranged units: move to get better position/LOS
-    if (!isMelee && moveTiles.length > 0 && allEnemies.length > 0 && actionsUsed === 0) {
-      // Only move on first action to avoid wasting both actions on movement
+    // No target available after first move - use cover
+    if (actionsUsed > 0 && !unit.isCovering) {
+      return { type: "cover" };
+    }
+
+    // First action with no good moves - just cover
+    if (!unit.isCovering) {
+      return { type: "cover" };
+    }
+
+    return null;
+  }
+
+  private medicBehavior(
+    state: BattleState,
+    unit: UnitState,
+    _actionsUsed: number,
+    actionsLeft: number,
+    enemies: UnitState[],
+    moveTiles: { x: number; z: number }[],
+    allEnemies: UnitState[]
+  ): BattleCommand | null {
+    const healTargets = getHealableAllies(state, unit);
+    const allAllies = state.units.filter(u => u.team === unit.team && u.hp > 0);
+
+    // Check for very injured ally who could benefit from double heal (and we're adjacent)
+    if (actionsLeft >= 2 && healTargets.length > 0) {
+      const veryInjured = healTargets.find(ally => {
+        const missingHp = ally.maxHp - ally.hp;
+        return missingHp >= unit.healAmount * 1.5; // Can benefit from 2 heals
+      });
+      if (veryInjured) {
+        return { type: "heal", targetUnitId: veryInjured.id };
+      }
+    }
+
+    // Check for injured ally we can heal now
+    if (healTargets.length > 0) {
+      const target = this.selectHealTarget(healTargets);
+      return { type: "heal", targetUnitId: target.id };
+    }
+
+    // Check for injured ally we could reach by moving
+    if (moveTiles.length > 0) {
+      const injuredAllies = allAllies.filter(a => a.hp < a.maxHp && a.id !== unit.id);
+      if (injuredAllies.length > 0) {
+        const moveToHeal = this.selectMoveTowardAlly(unit, moveTiles, injuredAllies);
+        if (moveToHeal) {
+          return { type: "move", targetX: moveToHeal.x, targetZ: moveToHeal.z };
+        }
+      }
+    }
+
+    // No healing needed - attack if possible
+    if (enemies.length > 0) {
+      const target = this.selectAttackTarget(enemies);
+      return { type: "attack", targetUnitId: target.id };
+    }
+
+    // No allies left except self - fight
+    if (allAllies.length <= 1 && moveTiles.length > 0 && allEnemies.length > 0) {
       const bestMove = this.selectMoveForRanged(state, unit, moveTiles, allEnemies);
       if (bestMove) {
         return { type: "move", targetX: bestMove.x, targetZ: bestMove.z };
       }
     }
 
-    // Use ability if nothing else to do
-    if (unit.unitClass === "operator" && !unit.isConcealed) {
-      return { type: "conceal" };
-    }
-    if (unit.unitClass === "soldier" && !unit.isCovering) {
-      return { type: "cover" };
+    // Nothing to do - move to position behind allies relative to enemies
+    if (moveTiles.length > 0 && allAllies.length > 1 && allEnemies.length > 0) {
+      const safePosition = this.selectSafePositionBehindAllies(unit, moveTiles, allAllies, allEnemies);
+      if (safePosition) {
+        return { type: "move", targetX: safePosition.x, targetZ: safePosition.z };
+      }
     }
 
     return null;
+  }
+
+  private selectSafePositionBehindAllies(
+    unit: UnitState,
+    moveTiles: { x: number; z: number }[],
+    allies: UnitState[],
+    enemies: UnitState[]
+  ): { x: number; z: number } | null {
+    // Calculate average enemy position
+    const enemyCenter = {
+      x: enemies.reduce((sum, e) => sum + e.gridX, 0) / enemies.length,
+      z: enemies.reduce((sum, e) => sum + e.gridZ, 0) / enemies.length,
+    };
+
+    // Calculate average ally position (excluding self)
+    const otherAllies = allies.filter(a => a.id !== unit.id);
+    if (otherAllies.length === 0) return null;
+
+    const allyCenter = {
+      x: otherAllies.reduce((sum, a) => sum + a.gridX, 0) / otherAllies.length,
+      z: otherAllies.reduce((sum, a) => sum + a.gridZ, 0) / otherAllies.length,
+    };
+
+    let bestMove: { x: number; z: number } | null = null;
+    let bestScore = -Infinity;
+
+    for (const tile of moveTiles) {
+      // Score based on:
+      // 1. Being close to allies (positive)
+      // 2. Being far from enemies (positive)
+      // 3. Being "behind" allies relative to enemies (positive)
+
+      const distToAllies = Math.abs(tile.x - allyCenter.x) + Math.abs(tile.z - allyCenter.z);
+      const distToEnemies = Math.abs(tile.x - enemyCenter.x) + Math.abs(tile.z - enemyCenter.z);
+
+      // Vector from enemy center to ally center (the "front line" direction)
+      const frontX = allyCenter.x - enemyCenter.x;
+      const frontZ = allyCenter.z - enemyCenter.z;
+
+      // Vector from ally center to this tile
+      const tileX = tile.x - allyCenter.x;
+      const tileZ = tile.z - allyCenter.z;
+
+      // Dot product - positive means "behind" allies (away from enemies)
+      const behindScore = (tileX * frontX + tileZ * frontZ);
+
+      // Combined score: close to allies, far from enemies, behind the front line
+      const score = -distToAllies * 2 + distToEnemies + behindScore * 3;
+
+      if (score > bestScore) {
+        bestScore = score;
+        bestMove = tile;
+      }
+    }
+
+    // Only move if it's actually an improvement
+    const currentDistToAllies = Math.abs(unit.gridX - allyCenter.x) + Math.abs(unit.gridZ - allyCenter.z);
+    const currentDistToEnemies = Math.abs(unit.gridX - enemyCenter.x) + Math.abs(unit.gridZ - enemyCenter.z);
+    const currentScore = -currentDistToAllies * 2 + currentDistToEnemies;
+
+    if (bestScore <= currentScore) {
+      return null;
+    }
+
+    return bestMove;
+  }
+
+  private selectMoveTowardAlly(
+    unit: UnitState,
+    moveTiles: { x: number; z: number }[],
+    allies: UnitState[]
+  ): { x: number; z: number } | null {
+    let bestMove: { x: number; z: number } | null = null;
+    let bestDistance = Infinity;
+
+    for (const tile of moveTiles) {
+      for (const ally of allies) {
+        const distance = Math.abs(tile.x - ally.gridX) + Math.abs(tile.z - ally.gridZ);
+        if (distance < bestDistance) {
+          bestDistance = distance;
+          bestMove = tile;
+        }
+      }
+    }
+
+    const currentMinDistance = allies.reduce((min, a) => {
+      const d = Math.abs(unit.gridX - a.gridX) + Math.abs(unit.gridZ - a.gridZ);
+      return Math.min(min, d);
+    }, Infinity);
+
+    if (bestDistance >= currentMinDistance) {
+      return null;
+    }
+
+    return bestMove;
   }
 
   private selectAttackTarget(enemies: UnitState[]): UnitState {
