@@ -12,116 +12,123 @@ import {
   PointerEventTypes,
   SceneLoader,
   AbstractMesh,
-  AnimationGroup,
   PBRMaterial,
 } from "@babylonjs/core";
 import "@babylonjs/loaders/glTF";
 import { AdvancedDynamicTexture, TextBlock, Button, Rectangle, StackPanel, Grid, Control } from "@babylonjs/gui";
-import { type Loadout, type UnitSelection, type UnitCustomization, type UnitClass, getClassData } from "../types";
+import {
+  type Loadout,
+  type UnitSelection,
+  type UnitCustomization,
+  type UnitClass,
+  type Team,
+  type ActionMode,
+  type TurnState,
+  type Unit,
+  getClassData,
+} from "../types";
 
-// Color palettes (same as LoadoutScene)
-const SKIN_TONES = [
-  "#FFDFC4", "#E8C0A0", "#D0A080", "#B08060", "#906040",
-  "#704828", "#503418", "#352210", "#1E1208", "#0A0604",
-];
-const HAIR_COLORS = [
-  "#0A0A0A", "#4A3728", "#E5C8A8", "#B55239", "#C0C0C0",
-  "#FF2222", "#FF66AA", "#9933FF", "#22CC44", "#2288FF",
-];
-const EYE_COLORS = [
-  "#2288FF", "#22AA44", "#634E34", "#DD2222",
-  "#9933FF", "#FFFFFF", "#0A0A0A", "#FF8800",
-];
+// Import centralized config - colors and palettes
+import {
+  SKIN_TONES,
+  HAIR_COLORS,
+  EYE_COLORS,
+  SCENE_BACKGROUNDS,
+  TILE_COLOR_LIGHT,
+  TILE_COLOR_DARK,
+  TERRAIN_COLOR,
+  HIGHLIGHT_SELECTED,
+  HIGHLIGHT_VALID_MOVE,
+  HIGHLIGHT_ATTACKABLE,
+  HIGHLIGHT_HEALABLE,
+  HIGHLIGHT_BLOCKED,
+  HP_BAR_GREEN,
+  HP_BAR_ORANGE,
+  HP_BAR_RED,
+  HP_BAR_BACKGROUND,
+  HP_BAR_BORDER,
+  INTENT_COLOR_ATTACK,
+  INTENT_COLOR_HEAL,
+  INTENT_COLOR_BUFF,
+  DEFAULT_TEAM_COLORS,
+  SHADOW_BASE_ALPHA,
+  SHADOW_UNIT_ALPHA,
+  INTENT_INDICATOR_ALPHA,
+  COVER_ACTIVE_ALPHA,
+  COVER_PREVIEW_ALPHA,
+  CONCEAL_ALPHA,
+  CONCEAL_EMISSIVE_SCALE,
+} from "../config";
 
-// Helper to convert hex color to Color3
-function hexToColor3(hex: string): Color3 {
-  const r = parseInt(hex.slice(1, 3), 16) / 255;
-  const g = parseInt(hex.slice(3, 5), 16) / 255;
-  const b = parseInt(hex.slice(5, 7), 16) / 255;
-  return new Color3(r, g, b);
-}
+// Import centralized config - constants
+import {
+  GRID_SIZE,
+  TILE_SIZE,
+  TILE_GAP,
+  TERRAIN_COUNT,
+  PLAYER1_SPAWN_POSITIONS,
+  PLAYER2_SPAWN_POSITIONS,
+  BATTLE_CAMERA_ALPHA,
+  BATTLE_CAMERA_BETA,
+  BATTLE_CAMERA_RADIUS,
+  BATTLE_CAMERA_LOWER_BETA_LIMIT,
+  BATTLE_CAMERA_UPPER_BETA_LIMIT,
+  BATTLE_CAMERA_LOWER_RADIUS_LIMIT,
+  BATTLE_CAMERA_UPPER_RADIUS_LIMIT,
+  MOVEMENT_DURATION_PER_TILE,
+  ATTACK_IMPACT_DELAY_MS,
+  ACTIONS_PER_TURN,
+  ACCUMULATOR_THRESHOLD,
+  SPEED_BONUS_PER_UNUSED_ACTION,
+  MELEE_DAMAGE_MULTIPLIER,
+  HP_LOW_THRESHOLD,
+  HP_MEDIUM_THRESHOLD,
+  BATTLE_MODEL_SCALE,
+  BATTLE_MODEL_Y_POSITION,
+  HP_BAR_ANCHOR_HEIGHT,
+  HEAD_VARIANT_COUNT,
+} from "../config";
 
-const GRID_SIZE = 8;
-const TILE_SIZE = 1;
-const TILE_GAP = 0.05;
+// Import audio config
+import { MUSIC, SFX, AUDIO_VOLUMES, LOOP_BUFFER_TIME } from "../config";
 
-type Team = "player1" | "player2";
-type ActionMode = "none" | "move" | "attack" | "ability";
+// Import utility functions
+import { hexToColor3, createMusicPlayer, playSfx, rgbToColor3 } from "../utils";
 
-// Pending action for preview system
-interface PendingAction {
-  type: "move" | "attack" | "ability";
-  targetX?: number;
-  targetZ?: number;
-  targetUnit?: Unit;
-  abilityName?: string;
-}
+// Import command pattern for action queue
+import {
+  type CommandExecutor,
+  type ControllerContext,
+  type BattleCommand,
+  CommandQueue,
+  createMoveCommand,
+  createAttackCommand,
+  createHealCommand,
+  createConcealCommand,
+  createCoverCommand,
+  processCommandQueue,
+  ControllerManager,
+  createLocalPvPControllers,
+  createPvEControllers,
+} from "../battle";
 
-// Turn state for preview/undo system
-interface TurnState {
-  unit: Unit;
-  actionsRemaining: number;
-  pendingActions: PendingAction[];
-  originalPosition: { x: number; z: number };
-  originalFacing: number;
-}
-
-// Facing configuration for a unit's model
-interface FacingConfig {
-  currentAngle: number;      // Current facing angle in radians
-  baseOffset: number;        // Model's base rotation offset (model-specific)
-  isFlipped: boolean;        // Whether model has negative X scale (right-handed)
-}
-
-interface Unit {
-  mesh: Mesh;
-  unitClass: UnitClass;
-  team: Team;
-  gridX: number;
-  gridZ: number;
-  moveRange: number;
-  attackRange: number;
-  hp: number;
-  maxHp: number;
-  attack: number;
-  healAmount: number;
-  hpBar?: Rectangle;
-  hpBarBg?: Rectangle;
-  originalColor: Color3;
-  // Action tracking (legacy - will migrate to TurnState)
-  hasMoved: boolean;
-  hasAttacked: boolean;
-  // Initiative system
-  speed: number;
-  speedBonus: number;  // Bonus from skipping, consumed after next turn
-  accumulator: number; // Builds up until >= 10, then unit acts
-  loadoutIndex: number; // Original position in loadout for tie-breaking
-  // 3D model data
-  modelRoot?: AbstractMesh;
-  modelMeshes?: AbstractMesh[];
-  animationGroups?: AnimationGroup[];
-  customization?: UnitCustomization;
-  teamColor: Color3;
-  // Facing system
-  facing: FacingConfig;
-  // Ability states
-  isConcealed: boolean;
-  isCovering: boolean;
-}
+// Pure game logic is available in /src/battle/ for headless simulations.
+// This file (BattleScene.ts) handles visual rendering and uses inline logic
+// that mirrors the pure versions. Future refactor: delegate to battle module.
+// See: /src/battle/state.ts (UnitState, BattleState)
+//      /src/battle/rules.ts (movement, LOS, combat, turns)
+//      /src/battle/commands.ts (Command pattern for actions)
+//      /src/battle/controllers.ts (Controller abstraction for PvE/PvP)
 
 export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, loadout: Loadout | null): Scene {
   const scene = new Scene(engine);
-  scene.clearColor.set(0.1, 0.1, 0.15, 1);
+  // Use centralized scene background color
+  const bg = SCENE_BACKGROUNDS.battle;
+  scene.clearColor.set(bg.r, bg.g, bg.b, bg.a);
 
   // Battle music - Placeholder
-  const music = new Audio("/audio/battle_v2.m4a");
-  music.loop = true;
-  music.volume = 0.5;
-  music.addEventListener("timeupdate", () => {
-    if (music.duration && music.currentTime >= music.duration - 0.5) {
-      music.currentTime = 0;
-    }
-  });
+  // Background music - using centralized audio config
+  const music = createMusicPlayer(MUSIC.battle, AUDIO_VOLUMES.music, true, LOOP_BUFFER_TIME);
   music.play();
 
   scene.onDisposeObservable.add(() => {
@@ -130,56 +137,56 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
   });
 
   // Sound effects
+  // Sound effects - using centralized audio paths and volumes
   const sfx = {
-    hitLight: new Audio("/audio/effects/hit-light.flac"),
-    hitMedium: new Audio("/audio/effects/hit-medium.flac"),
-    hitHeavy: new Audio("/audio/effects/hit-heavy.flac"),
-    heal: new Audio("/audio/effects/Cure1.wav"),
+    hitLight: new Audio(SFX.hitLight),
+    hitMedium: new Audio(SFX.hitMedium),
+    hitHeavy: new Audio(SFX.hitHeavy),
+    heal: new Audio(SFX.heal),
   };
-  // Set volume for sound effects
-  Object.values(sfx).forEach(sound => sound.volume = 0.6);
+  // Set volume for all sound effects
+  Object.values(sfx).forEach(sound => sound.volume = AUDIO_VOLUMES.sfx);
+  // Note: playSfx is now imported from utils
 
-  function playSfx(sound: HTMLAudioElement): void {
-    sound.currentTime = 0;
-    sound.play();
-  }
-
+  // Camera - using centralized constants for isometric tactical view
   const camera = new ArcRotateCamera(
     "camera",
-    Math.PI / 4,
-    Math.PI / 3,
-    12,
+    BATTLE_CAMERA_ALPHA,
+    BATTLE_CAMERA_BETA,
+    BATTLE_CAMERA_RADIUS,
     new Vector3(0, 0, 0),
     scene
   );
   camera.attachControl(true);
-  camera.lowerBetaLimit = 0.3;
-  camera.upperBetaLimit = Math.PI / 2.2;
-  camera.lowerRadiusLimit = 8;
-  camera.upperRadiusLimit = 20;
+  camera.lowerBetaLimit = BATTLE_CAMERA_LOWER_BETA_LIMIT;
+  camera.upperBetaLimit = BATTLE_CAMERA_UPPER_BETA_LIMIT;
+  camera.lowerRadiusLimit = BATTLE_CAMERA_LOWER_RADIUS_LIMIT;
+  camera.upperRadiusLimit = BATTLE_CAMERA_UPPER_RADIUS_LIMIT;
 
   new HemisphericLight("ambientLight", new Vector3(0, 1, 0), scene);
   const dirLight = new DirectionalLight("dirLight", new Vector3(-1, -2, -1), scene);
   dirLight.intensity = 0.5;
 
   // Tile materials
+  // Tile materials - using centralized color config
   const tileMaterialLight = new StandardMaterial("tileLightMat", scene);
-  tileMaterialLight.diffuseColor = new Color3(0.18, 0.22, 0.17);
+  tileMaterialLight.diffuseColor = rgbToColor3(TILE_COLOR_LIGHT);
 
   const tileMaterialDark = new StandardMaterial("tileDarkMat", scene);
-  tileMaterialDark.diffuseColor = new Color3(0.12, 0.15, 0.11);
+  tileMaterialDark.diffuseColor = rgbToColor3(TILE_COLOR_DARK);
 
+  // Highlight materials - using centralized color config
   const selectedMaterial = new StandardMaterial("selectedMat", scene);
-  selectedMaterial.diffuseColor = new Color3(0.8, 0.8, 0.2);
+  selectedMaterial.diffuseColor = rgbToColor3(HIGHLIGHT_SELECTED);
 
   const validMoveMaterial = new StandardMaterial("validMoveMat", scene);
-  validMoveMaterial.diffuseColor = new Color3(0.3, 0.6, 0.9);
+  validMoveMaterial.diffuseColor = rgbToColor3(HIGHLIGHT_VALID_MOVE);
 
   const attackableMaterial = new StandardMaterial("attackableMat", scene);
-  attackableMaterial.diffuseColor = new Color3(0.9, 0.3, 0.3);
+  attackableMaterial.diffuseColor = rgbToColor3(HIGHLIGHT_ATTACKABLE);
 
   const healableMaterial = new StandardMaterial("healableMat", scene);
-  healableMaterial.diffuseColor = new Color3(0.3, 0.9, 0.5);
+  healableMaterial.diffuseColor = rgbToColor3(HIGHLIGHT_HEALABLE);
 
   const unitMaterials: Record<UnitClass, StandardMaterial> = {
     soldier: createUnitMaterial("soldier", new Color3(0.3, 0.3, 0.8), scene),
@@ -217,102 +224,104 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
   // Store terrain positions for collision checking
   const terrainTiles: Set<string> = new Set();
 
-  // Starting positions to avoid
-  const spawnPositions = [
-    { x: 1, z: 1 }, { x: 3, z: 0 }, { x: 5, z: 1 },  // Player 1 spawns
-    { x: 6, z: 6 }, { x: 4, z: 7 }, { x: 2, z: 6 },  // Player 2 spawns
-  ];
-  const reservedPositions = new Set(spawnPositions.map(p => `${p.x},${p.z}`));
+  // ============================================
+  // TERRAIN GENERATION - Constructive Algorithm
+  // ============================================
+  // Instead of generate-and-validate, we:
+  // 1. Build a guaranteed main corridor along an edge (not middle)
+  // 2. Connect each spawn point to the corridor via cardinal paths
+  // 3. Mark all path tiles as "protected"
+  // 4. Place terrain only in unprotected tiles (middle of map)
+  // This always succeeds and is deterministic with a seed.
 
-  // Check if all spawn positions have at least one adjacent walkable tile
-  function allSpawnsHaveExit(blocked: Set<string>): boolean {
-    for (const spawn of spawnPositions) {
-      const adjacent = [
-        { x: spawn.x - 1, z: spawn.z },
-        { x: spawn.x + 1, z: spawn.z },
-        { x: spawn.x, z: spawn.z - 1 },
-        { x: spawn.x, z: spawn.z + 1 },
-      ];
-      const hasExit = adjacent.some(({ x, z }) =>
-        x >= 0 && x < GRID_SIZE && z >= 0 && z < GRID_SIZE && !blocked.has(`${x},${z}`)
-      );
-      if (!hasExit) return false;
-    }
-    return true;
-  }
+  // Combine spawn positions for terrain generation (using config constants)
+  const spawnPositions = [...PLAYER1_SPAWN_POSITIONS, ...PLAYER2_SPAWN_POSITIONS];
 
-  // Check if a path exists from bottom row (z=0) to top row (z=7) avoiding terrain
-  function hasPathBetweenRows(blocked: Set<string>): boolean {
-    const visited = new Set<string>();
-    const queue: [number, number][] = [];
+  /**
+   * Generate an edge-hugging corridor from bottom to top.
+   * Routes along left or right edge with some variance, leaving middle open.
+   */
+  function generateEdgeCorridor(): { x: number; z: number }[] {
+    const path: { x: number; z: number }[] = [];
 
-    // Start from all non-blocked tiles on z=0
-    for (let x = 0; x < GRID_SIZE; x++) {
-      const key = `${x},0`;
-      if (!blocked.has(key)) {
-        queue.push([x, 0]);
-        visited.add(key);
+    // Pick which edge to favor (left or right)
+    const favorLeft = Math.random() < 0.5;
+
+    // Start position: on or near the chosen edge
+    let x = favorLeft
+      ? Math.floor(Math.random() * 2)  // 0 or 1
+      : GRID_SIZE - 1 - Math.floor(Math.random() * 2);  // 6 or 7
+
+    // Walk from z=0 to z=GRID_SIZE-1
+    for (let z = 0; z < GRID_SIZE; z++) {
+      path.push({ x, z });
+
+      // Occasionally drift laterally (but stay near edge)
+      if (z < GRID_SIZE - 1 && Math.random() < 0.3) {
+        // Drift toward or away from edge
+        const driftTowardEdge = Math.random() < 0.6;  // Bias toward edge
+        if (driftTowardEdge) {
+          // Move toward edge
+          if (favorLeft && x > 0) x--;
+          else if (!favorLeft && x < GRID_SIZE - 1) x++;
+        } else {
+          // Move away from edge (but not too far - stay in outer third)
+          const maxDrift = Math.floor(GRID_SIZE / 3);
+          if (favorLeft && x < maxDrift) x++;
+          else if (!favorLeft && x > GRID_SIZE - 1 - maxDrift) x--;
+        }
       }
     }
+
+    return path;
+  }
+
+  /**
+   * Find shortest cardinal path from start to any tile in the target set using BFS.
+   * Only uses cardinal directions (no diagonals) since units can't move diagonally.
+   */
+  function findCardinalPathToSet(
+    startX: number,
+    startZ: number,
+    targetSet: Set<string>
+  ): { x: number; z: number }[] {
+    const startKey = `${startX},${startZ}`;
+
+    // BFS to find shortest cardinal path to any target tile
+    const visited = new Set<string>();
+    const parent = new Map<string, string | null>();
+    const queue: [number, number][] = [[startX, startZ]];
+    visited.add(startKey);
+    parent.set(startKey, null);
 
     while (queue.length > 0) {
       const [cx, cz] = queue.shift()!;
-
-      // Reached top row
-      if (cz === GRID_SIZE - 1) return true;
-
-      // Check cardinal directions
-      const directions = [[0, 1], [0, -1], [1, 0], [-1, 0]];
-      for (const [dx, dz] of directions) {
-        const nx = cx + dx;
-        const nz = cz + dz;
-        const key = `${nx},${nz}`;
-
-        if (nx < 0 || nx >= GRID_SIZE || nz < 0 || nz >= GRID_SIZE) continue;
-        if (visited.has(key) || blocked.has(key)) continue;
-
-        visited.add(key);
-        queue.push([nx, nz]);
-      }
-    }
-
-    return false;
-  }
-
-  // Count distinct paths by checking if path exists after blocking each tile on a found path
-  function hasMultiplePaths(blocked: Set<string>): boolean {
-    // Find one path first
-    const visited = new Set<string>();
-    const parent = new Map<string, string | null>();
-    const queue: [number, number][] = [];
-
-    for (let x = 0; x < GRID_SIZE; x++) {
-      const key = `${x},0`;
-      if (!blocked.has(key)) {
-        queue.push([x, 0]);
-        visited.add(key);
-        parent.set(key, null);
-      }
-    }
-
-    let endKey: string | null = null;
-    while (queue.length > 0 && !endKey) {
-      const [cx, cz] = queue.shift()!;
       const currentKey = `${cx},${cz}`;
 
-      if (cz === GRID_SIZE - 1) {
-        endKey = currentKey;
-        break;
+      // Check if we reached a target tile (but not the start itself)
+      if (targetSet.has(currentKey) && currentKey !== startKey) {
+        // Reconstruct path from start to this target
+        const path: { x: number; z: number }[] = [];
+        let key: string | null = currentKey;
+        while (key) {
+          const [px, pz] = key.split(",").map(Number);
+          path.unshift({ x: px, z: pz });
+          key = parent.get(key) || null;
+        }
+        return path;
       }
 
-      const directions = [[0, 1], [0, -1], [1, 0], [-1, 0]];
-      for (const [dx, dz] of directions) {
+      // Explore cardinal neighbors only (no diagonals!)
+      const cardinalDirs = [[0, 1], [0, -1], [1, 0], [-1, 0]];
+      for (const [dx, dz] of cardinalDirs) {
         const nx = cx + dx;
         const nz = cz + dz;
         const key = `${nx},${nz}`;
 
+        // Stay in bounds
         if (nx < 0 || nx >= GRID_SIZE || nz < 0 || nz >= GRID_SIZE) continue;
-        if (visited.has(key) || blocked.has(key)) continue;
+        // Don't revisit
+        if (visited.has(key)) continue;
 
         visited.add(key);
         parent.set(key, currentKey);
@@ -320,69 +329,101 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
       }
     }
 
-    if (!endKey) return false; // No path at all
-
-    // Reconstruct path
-    const pathTiles: string[] = [];
-    let current: string | null = endKey;
-    while (current) {
-      pathTiles.push(current);
-      current = parent.get(current) || null;
-    }
-
-    // Check if blocking any tile on the path still leaves an alternative
-    for (const tile of pathTiles) {
-      const testBlocked = new Set(blocked);
-      testBlocked.add(tile);
-      if (hasPathBetweenRows(testBlocked)) {
-        return true; // Found alternative path
-      }
-    }
-
-    return false; // Blocking any tile on the path breaks connectivity
+    // No path found (shouldn't happen on open grid) - return just start
+    console.warn(`No cardinal path found from (${startX},${startZ}) to corridor`);
+    return [{ x: startX, z: startZ }];
   }
 
-  // Generate 10 random terrain positions ensuring at least 2 paths exist
+  /**
+   * Constructive terrain generation algorithm.
+   * Guarantees valid terrain on first try - no retries needed.
+   */
   function generateTerrainPositions(): { x: number; z: number }[] {
-    const maxAttempts = 100;
+    const protectedTiles = new Set<string>();
 
-    for (let attempt = 0; attempt < maxAttempts; attempt++) {
-      const positions: { x: number; z: number }[] = [];
-      const used = new Set(reservedPositions);
-      const testTerrain = new Set<string>();
+    // Step 1: Create main corridor along an edge (leaves middle open for terrain)
+    const mainCorridor = generateEdgeCorridor();
 
-      while (positions.length < 10) {
-        const x = Math.floor(Math.random() * GRID_SIZE);
-        const z = Math.floor(Math.random() * GRID_SIZE);
-        const key = `${x},${z}`;
+    // Add main corridor to protected set
+    for (const tile of mainCorridor) {
+      protectedTiles.add(`${tile.x},${tile.z}`);
+    }
 
-        if (!used.has(key)) {
-          used.add(key);
-          positions.push({ x, z });
-          testTerrain.add(key);
-        }
+    // Step 2: Connect each spawn to the corridor via cardinal path
+    // IMPORTANT: Don't add spawns to protected BEFORE finding paths,
+    // otherwise findCardinalPathToSet returns immediately
+    for (const spawn of spawnPositions) {
+      // Find cardinal path from spawn to nearest protected tile
+      const pathToCorridor = findCardinalPathToSet(
+        spawn.x, spawn.z,
+        protectedTiles
+      );
+
+      // Add entire path (including spawn) to protected tiles
+      for (const tile of pathToCorridor) {
+        protectedTiles.add(`${tile.x},${tile.z}`);
       }
 
-      // Validate: must have at least 2 distinct paths AND no blocked-in spawns
-      if (hasMultiplePaths(testTerrain) && allSpawnsHaveExit(testTerrain)) {
-        // Valid configuration - add to actual terrain set
-        for (const key of testTerrain) {
-          terrainTiles.add(key);
-        }
-        return positions;
+      // Also protect the spawn itself (in case path didn't include it)
+      protectedTiles.add(`${spawn.x},${spawn.z}`);
+    }
+
+    // Step 3: Verify each spawn has at least one cardinal exit
+    // (Should always be true now, but safety check)
+    for (const spawn of spawnPositions) {
+      const cardinalNeighbors = [
+        { x: spawn.x - 1, z: spawn.z },
+        { x: spawn.x + 1, z: spawn.z },
+        { x: spawn.x, z: spawn.z - 1 },
+        { x: spawn.x, z: spawn.z + 1 },
+      ].filter(n => n.x >= 0 && n.x < GRID_SIZE && n.z >= 0 && n.z < GRID_SIZE);
+
+      const hasCardinalExit = cardinalNeighbors.some(n =>
+        protectedTiles.has(`${n.x},${n.z}`)
+      );
+
+      if (!hasCardinalExit && cardinalNeighbors.length > 0) {
+        // Protect a random cardinal neighbor
+        const randomNeighbor = cardinalNeighbors[
+          Math.floor(Math.random() * cardinalNeighbors.length)
+        ];
+        protectedTiles.add(`${randomNeighbor.x},${randomNeighbor.z}`);
       }
     }
 
-    // Fallback: return empty (no terrain) if can't find valid config
-    console.warn("Could not generate valid terrain with 2 paths, using no terrain");
-    return [];
+    // Step 4: Collect eligible tiles for terrain (not protected)
+    const eligibleTiles: { x: number; z: number }[] = [];
+    for (let x = 0; x < GRID_SIZE; x++) {
+      for (let z = 0; z < GRID_SIZE; z++) {
+        if (!protectedTiles.has(`${x},${z}`)) {
+          eligibleTiles.push({ x, z });
+        }
+      }
+    }
+
+    // Step 5: Shuffle and select terrain tiles
+    for (let i = eligibleTiles.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [eligibleTiles[i], eligibleTiles[j]] = [eligibleTiles[j], eligibleTiles[i]];
+    }
+
+    const terrainCount = Math.min(TERRAIN_COUNT, eligibleTiles.length);
+    const positions = eligibleTiles.slice(0, terrainCount);
+
+    // Add to terrain tiles set for collision detection
+    for (const pos of positions) {
+      terrainTiles.add(`${pos.x},${pos.z}`);
+    }
+
+    return positions;
   }
 
   const terrainPositions = generateTerrainPositions();
 
   // Create terrain cube meshes
+  // Terrain material - using centralized color config
   const terrainMaterial = new StandardMaterial("terrainMat", scene);
-  terrainMaterial.diffuseColor = new Color3(0.4, 0.35, 0.3);
+  terrainMaterial.diffuseColor = rgbToColor3(TERRAIN_COLOR);
   terrainMaterial.specularColor = new Color3(0.1, 0.1, 0.1);
 
   const tileTopY = 0.05;  // Top surface of tiles (tiles are height 0.1 centered at Y=0)
@@ -408,6 +449,69 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
     return terrainTiles.has(`${x},${z}`);
   }
 
+  // ============================================
+  // STATE EXTRACTION (for simulations/AI)
+  // ============================================
+  // These functions extract pure game state for use with /src/battle/ rules.
+  // This enables headless simulations without Babylon.js dependencies.
+
+  /**
+   * Extract pure UnitState from a visual Unit.
+   * Used for simulations, AI, and state synchronization.
+   */
+  function extractUnitState(unit: Unit, index: number): import("../battle").UnitState {
+    return {
+      id: `${unit.team}-${index}`,
+      unitClass: unit.unitClass,
+      team: unit.team,
+      gridX: unit.gridX,
+      gridZ: unit.gridZ,
+      hp: unit.hp,
+      maxHp: unit.maxHp,
+      attack: unit.attack,
+      healAmount: unit.healAmount,
+      moveRange: unit.moveRange,
+      attackRange: unit.attackRange,
+      combatStyle: unit.customization?.combatStyle ?? "ranged",
+      speed: unit.speed,
+      speedBonus: unit.speedBonus,
+      accumulator: unit.accumulator,
+      loadoutIndex: unit.loadoutIndex,
+      isConcealed: unit.isConcealed,
+      isCovering: unit.isCovering,
+      coveredTiles: [], // TODO: track covered tiles in Unit
+      actionsUsed: turnState?.unit === unit ? (ACTIONS_PER_TURN - turnState.actionsRemaining) : 0,
+    };
+  }
+
+  /**
+   * Extract complete BattleState from current game.
+   * Used for simulations, AI decision making, and state sync.
+   */
+  function extractBattleState(): import("../battle").BattleState {
+    const currentUnit = turnState?.unit;
+    return {
+      gridSize: GRID_SIZE,
+      terrain: new Set(terrainTiles),
+      units: units.map((u, i) => extractUnitState(u, i)),
+      currentUnitId: currentUnit ? `${currentUnit.team}-${units.indexOf(currentUnit)}` : null,
+      actionsRemaining: turnState?.actionsRemaining ?? 0,
+      pendingActions: turnState?.pendingActions.map(a => ({
+        type: a.type,
+        targetX: a.targetX,
+        targetZ: a.targetZ,
+        targetUnitId: a.targetUnit ? `${a.targetUnit.team}-${units.indexOf(a.targetUnit)}` : undefined,
+        abilityName: a.abilityName,
+      })) ?? [],
+      originalPosition: turnState?.originalPosition ?? null,
+      isGameOver: false, // TODO: track game over state
+      winner: null,
+    };
+  }
+
+  // Export state extraction for external use (AI, simulations)
+  void extractBattleState; // Prevent unused warning
+
   // GUI
   const gui = AdvancedDynamicTexture.CreateFullscreenUI("UI");
 
@@ -417,6 +521,136 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
   // Current turn state for preview/undo system
   let turnState: TurnState | null = null;
   let currentActionMode: ActionMode = "none";
+
+  // Command queue for pending actions
+  const commandQueue = new CommandQueue();
+
+  // Helper to get unit ID (for command serialization)
+  function getUnitId(unit: Unit): string {
+    return `${unit.team}-${units.indexOf(unit)}`;
+  }
+
+  // Helper to find unit by ID
+  function findUnitById(id: string): Unit | undefined {
+    const [team, indexStr] = id.split("-");
+    const index = parseInt(indexStr, 10);
+    return units.find((u, i) => u.team === team && i === index);
+  }
+
+  // ============================================
+  // CONTROLLER SYSTEM
+  // ============================================
+  // Controllers handle input for each team (human, AI, or network).
+  // Default is local PvP (both human). Can be changed for PvE or online play.
+
+  // Create controller manager based on game mode from loadout
+  let controllerManager: ControllerManager;
+  if (loadout?.gameMode === "local-pve") {
+    // PvE mode: human controls one team, AI controls the other
+    const humanTeam = loadout.humanTeam || "player1";
+    controllerManager = createPvEControllers(humanTeam, "medium");
+  } else {
+    // Default: local PvP (both teams controlled by humans)
+    controllerManager = createLocalPvPControllers();
+  }
+
+  /** Create controller context for the current turn */
+  function createControllerContext(unit: Unit): ControllerContext {
+    return {
+      state: extractBattleState(),
+      unit: extractUnitState(unit, units.indexOf(unit)),
+      actionsRemaining: turnState?.actionsRemaining ?? 0,
+
+      issueCommand(command: BattleCommand): boolean {
+        if (!turnState || turnState.actionsRemaining <= 0) return false;
+
+        // Get pending move position (if unit has a queued move, use that position)
+        let fromX = unit.gridX;
+        let fromZ = unit.gridZ;
+        for (const action of turnState.pendingActions) {
+          if (action.type === "move" && action.targetX !== undefined && action.targetZ !== undefined) {
+            fromX = action.targetX;
+            fromZ = action.targetZ;
+          }
+        }
+
+        // Route command to appropriate queue function
+        switch (command.type) {
+          case "move": {
+            // Validate from pending position (works for both human UI and AI)
+            const validMoves = getValidMoveTiles(unit, fromX, fromZ);
+            const isValid = validMoves.some(t => t.x === command.targetX && t.z === command.targetZ);
+            if (isValid) {
+              queueMoveAction(unit, command.targetX, command.targetZ);
+              return true;
+            }
+            return false;
+          }
+
+          case "attack": {
+            const target = findUnitById(command.targetUnitId);
+            if (!target) return false;
+            // Validate from pending position (works for both human UI and AI)
+            const validTargets = getAttackableEnemiesWithLOS(unit, fromX, fromZ);
+            if (validTargets.includes(target)) {
+              queueAttackAction(unit, target);
+              return true;
+            }
+            return false;
+          }
+
+          case "heal": {
+            const target = findUnitById(command.targetUnitId);
+            if (!target) return false;
+            // Validate from pending position (works for both human UI and AI)
+            const validTargets = getHealableAllies(unit, fromX, fromZ);
+            if (validTargets.includes(target)) {
+              queueHealAction(unit, target);
+              return true;
+            }
+            return false;
+          }
+
+          case "conceal":
+            if (unit.unitClass === "operator" && !unit.isConcealed) {
+              queueConcealAction(unit);
+              return true;
+            }
+            return false;
+
+          case "cover":
+            if (unit.unitClass === "soldier") {
+              queueCoverAction(unit);
+              return true;
+            }
+            return false;
+        }
+      },
+
+      executeTurn(): void {
+        executeQueuedActions();
+      },
+
+      undoLastCommand(): void {
+        undoLastAction();
+      },
+    };
+  }
+
+  /** Get current controller manager (for external configuration) */
+  function getControllerManager(): ControllerManager {
+    return controllerManager;
+  }
+
+  /** Set controller manager (to switch between PvP/PvE modes) */
+  function setControllerManager(manager: ControllerManager): void {
+    controllerManager.dispose();
+    controllerManager = manager;
+  }
+
+  // Export controller functions for external use
+  void getControllerManager;
+  void setControllerManager;
 
   // Callback for when a unit's turn starts (set later by command menu)
   let onTurnStartCallback: ((unit: Unit) => void) | null = null;
@@ -694,10 +928,8 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
         // Skip terrain tiles (no unit can stand there)
         if (hasTerrain(x, z)) continue;
 
-        const distance = Math.abs(x - fromX) + Math.abs(z - fromZ);
-
-        // If excluding adjacent (for guns), skip distance 1
-        if (excludeAdjacent && distance === 1) continue;
+        // If excluding adjacent (for guns), skip all 8 adjacent tiles including diagonals
+        if (excludeAdjacent && isAdjacent(fromX, fromZ, x, z)) continue;
 
         if (hasLineOfSight(fromX, fromZ, x, z, excludeUnit)) {
           result.push({ x, z });
@@ -780,8 +1012,9 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
   }
 
   // LOS-blocked material (gray for blocked targets)
+  // Blocked tile material (no LOS) - using centralized color config
   const blockedMaterial = new StandardMaterial("blockedMat", scene);
-  blockedMaterial.diffuseColor = new Color3(0.4, 0.4, 0.4);
+  blockedMaterial.diffuseColor = rgbToColor3(HIGHLIGHT_BLOCKED);
 
   // Export references for future use (prevents unused warnings)
   const _helpers = { getTilesInLOS, getValidAttackTiles, createShadowPreview, clearShadowPreview, shadowPosition: () => shadowPosition, highlightAttackTargets, getAttackableEnemiesWithLOS, showAttackPreview, clearAttackPreview, highlightHealTargets, toggleConceal, toggleCover, clearCoverVisualization };
@@ -830,7 +1063,7 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
     playAnimation(unit, "Run", true);
 
     let currentWaypointIndex = 0;
-    const durationPerTile = 0.3; // seconds per tile
+    const durationPerTile = MOVEMENT_DURATION_PER_TILE;
     let segmentElapsed = 0;
 
     // Set initial facing toward first waypoint (from start position)
@@ -912,13 +1145,14 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
     );
     const shadowBaseMat = new StandardMaterial("shadowBaseMat", scene);
     shadowBaseMat.diffuseColor = unit.teamColor;
-    shadowBaseMat.alpha = 0.4;
+    shadowBaseMat.alpha = SHADOW_BASE_ALPHA;
     shadowBaseMesh.material = shadowBaseMat;
     shadowBaseMesh.position = new Vector3(
       targetX * TILE_SIZE - gridOffset,
       0.1,
       targetZ * TILE_SIZE - gridOffset
     );
+    shadowBaseMesh.isPickable = false; // Allow clicks to pass through
 
     // Create shadow silhouette (simple cylinder for now)
     shadowMesh = MeshBuilder.CreateCylinder(
@@ -928,13 +1162,14 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
     );
     const shadowMat = new StandardMaterial("shadowMat", scene);
     shadowMat.diffuseColor = unit.teamColor;
-    shadowMat.alpha = 0.3;
+    shadowMat.alpha = SHADOW_UNIT_ALPHA;
     shadowMesh.material = shadowMat;
     shadowMesh.position = new Vector3(
       targetX * TILE_SIZE - gridOffset,
       0.6,
       targetZ * TILE_SIZE - gridOffset
     );
+    shadowMesh.isPickable = false; // Allow clicks to pass through
   }
 
   function clearShadowPreview(): void {
@@ -965,7 +1200,7 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
     const indicatorMat = new StandardMaterial("intentMat", scene);
     indicatorMat.diffuseColor = color;
     indicatorMat.emissiveColor = color.scale(0.3);  // Slight glow effect
-    indicatorMat.alpha = 0.5;
+    indicatorMat.alpha = INTENT_INDICATOR_ALPHA;
     indicator.material = indicatorMat;
     indicator.position = new Vector3(
       targetX * TILE_SIZE - gridOffset,
@@ -1002,32 +1237,32 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
 
     for (const action of turnState.pendingActions) {
       if (action.type === "attack" && action.targetUnit) {
-        // Red indicator for attack
+        // Attack indicator - using centralized color
         const stackIndex = getStackIndex(action.targetUnit.gridX, action.targetUnit.gridZ);
         const indicator = createIntentIndicator(
           action.targetUnit.gridX,
           action.targetUnit.gridZ,
-          new Color3(0.9, 0.2, 0.2),  // Red
+          rgbToColor3(INTENT_COLOR_ATTACK),
           stackIndex
         );
         intentIndicators.push(indicator);
       } else if (action.type === "ability" && action.abilityName === "heal" && action.targetUnit) {
-        // Green indicator for heal/support
+        // Heal indicator - using centralized color
         const stackIndex = getStackIndex(action.targetUnit.gridX, action.targetUnit.gridZ);
         const indicator = createIntentIndicator(
           action.targetUnit.gridX,
           action.targetUnit.gridZ,
-          new Color3(0.2, 0.9, 0.3),  // Green
+          rgbToColor3(INTENT_COLOR_HEAL),
           stackIndex
         );
         intentIndicators.push(indicator);
       } else if (action.type === "ability" && (action.abilityName === "conceal" || action.abilityName === "cover") && action.targetUnit) {
-        // Blue indicator for self-buff abilities
+        // Self-buff indicator - using centralized color
         const stackIndex = getStackIndex(action.targetUnit.gridX, action.targetUnit.gridZ);
         const indicator = createIntentIndicator(
           action.targetUnit.gridX,
           action.targetUnit.gridZ,
-          new Color3(0.2, 0.5, 0.9),  // Blue
+          rgbToColor3(INTENT_COLOR_BUFF),
           stackIndex
         );
         intentIndicators.push(indicator);
@@ -1035,30 +1270,22 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
     }
   }
 
-  // Starting positions for each team
-  const player1Positions = [
-    { x: 1, z: 1 },
-    { x: 3, z: 0 },
-    { x: 5, z: 1 },
-  ];
-  const player2Positions = [
-    { x: 6, z: 6 },
-    { x: 4, z: 7 },
-    { x: 2, z: 6 },
-  ];
+  // Starting positions for each team - using centralized constants
+  const player1Positions = [...PLAYER1_SPAWN_POSITIONS];
+  const player2Positions = [...PLAYER2_SPAWN_POSITIONS];
 
   // Use loadout if provided, otherwise default setup
   const defaultUnits: UnitSelection[] = [{ unitClass: "soldier" }, { unitClass: "operator" }, { unitClass: "medic" }];
   const player1Selections = loadout?.player1 ?? defaultUnits;
   const player2Selections = loadout?.player2 ?? defaultUnits;
 
-  // Get team colors from loadout or use defaults
+  // Get team colors from loadout or use centralized defaults
   const player1TeamColor = loadout?.player1TeamColor
     ? hexToColor3(loadout.player1TeamColor)
-    : new Color3(0.2, 0.4, 0.9);  // Default blue
+    : rgbToColor3(DEFAULT_TEAM_COLORS.player1);
   const player2TeamColor = loadout?.player2TeamColor
     ? hexToColor3(loadout.player2TeamColor)
-    : new Color3(0.9, 0.3, 0.2);  // Default red
+    : rgbToColor3(DEFAULT_TEAM_COLORS.player2);
 
   // Spawn units asynchronously
   async function spawnAllUnits(): Promise<void> {
@@ -1129,12 +1356,11 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
   let healableUnits: Unit[] = [];
   let gameOver = false;
 
-  // Initiative system
+  // Initiative system - ACCUMULATOR_THRESHOLD imported from config
   let currentUnit: Unit | null = null;
   let lastActingTeam: Team | null = null;
   let isFirstRound = true;
   let firstRoundQueue: Unit[] = [];
-  const ACCUMULATOR_THRESHOLD = 10;
 
   // Active unit corner indicators
   let cornerMeshes: Mesh[] = [];
@@ -1322,10 +1548,13 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
 
     updateTurnIndicator();
 
-    // Initialize turn state for preview/undo system
+    // Clear command queue for new turn
+    commandQueue.clear();
+
+    // Initialize turn state for preview/undo system (using centralized constant)
     turnState = {
       unit,
-      actionsRemaining: 2,
+      actionsRemaining: ACTIONS_PER_TURN,
       pendingActions: [],
       originalPosition: { x: unit.gridX, z: unit.gridZ },
       originalFacing: unit.facing.currentAngle,
@@ -1335,16 +1564,23 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
     if (onTurnStartCallback) {
       onTurnStartCallback(unit);
     }
+
+    // Highlight the active unit's tile yellow
+    highlightActiveUnitTile();
+
+    // Notify controller that turn has started
+    // This allows AI/network controllers to take over
+    const context = createControllerContext(unit);
+    controllerManager.notifyTurnStart(unit.team, context);
   }
 
   function endCurrentUnitTurn(): void {
     const unit = currentUnit;
     if (!unit) return;
 
-    // Calculate speed bonus based on unused actions
-    // Each unused action gives +0.5 speed bonus for next turn
+    // Calculate speed bonus based on unused actions (using centralized constant)
     const unusedActions = turnState?.actionsRemaining ?? 0;
-    unit.speedBonus = unusedActions * 0.25;
+    unit.speedBonus = unusedActions * SPEED_BONUS_PER_UNUSED_ACTION;
 
     // Clear turn state
     turnState = null;
@@ -1359,10 +1595,13 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
     clearAttackPreview();
     clearIntentIndicators();
 
+    // Notify controller that turn ended
+    controllerManager.notifyTurnEnd(unit.team);
+
     lastActingTeam = unit.team;
-    clearHighlights();
     selectedUnit = null;
     currentUnit = null;
+    clearHighlights();
 
     const nextUnit = getNextUnit();
     if (nextUnit) {
@@ -1392,6 +1631,26 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
     highlightedTiles = [];
     attackableUnits = [];
     healableUnits = [];
+
+    // Always keep the active unit's tile highlighted yellow
+    highlightActiveUnitTile();
+  }
+
+  // Highlight just the active unit's current tile (or shadow position) yellow
+  function highlightActiveUnitTile(): void {
+    if (!currentUnit) return;
+
+    // Use shadow position if there's a pending move, otherwise current position
+    const effectiveX = shadowPosition?.x ?? currentUnit.gridX;
+    const effectiveZ = shadowPosition?.z ?? currentUnit.gridZ;
+
+    const tile = tiles[effectiveX][effectiveZ];
+    tile.material = selectedMaterial;
+
+    // Track it so it can be cleared properly later
+    if (!highlightedTiles.includes(tile)) {
+      highlightedTiles.push(tile);
+    }
   }
 
   function hasActionsRemaining(): boolean {
@@ -1526,7 +1785,9 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
     return [{ x: fromX, z: fromZ }, { x: toX, z: toZ }];
   }
 
-  function getAttackableEnemies(unit: Unit, fromX?: number, fromZ?: number): Unit[] {
+  // Legacy function - kept for potential AI/simulation use (simpler than LOS version)
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  function getAttackableEnemiesSimple(unit: Unit, fromX?: number, fromZ?: number): Unit[] {
     if (!hasActionsRemaining()) return []; // No actions remaining
     // Use shadow position if pending move, otherwise use provided or current position
     const effectiveX = fromX ?? shadowPosition?.x ?? unit.gridX;
@@ -1537,10 +1798,12 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
       return distance <= unit.attackRange;
     });
   }
+  // Export for future AI/simulation use
+  void getAttackableEnemiesSimple;
 
   function getHealableAllies(unit: Unit, fromX?: number, fromZ?: number): Unit[] {
-    // Only support can heal, needs actions remaining
-    // Heal is adjacent only (distance <= 1, including self)
+    // Only medic can heal, needs actions remaining
+    // Heal works on self or all 8 adjacent tiles with LOS (diagonals require LOS check)
     if (unit.healAmount <= 0 || !hasActionsRemaining()) return [];
 
     // Use shadow position if pending move, otherwise use provided or current position
@@ -1554,14 +1817,24 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
 
       // For the healer themselves with a pending move:
       // They can self-heal but only by clicking the shadow position (distance 0 from effective)
-      // Their original gridX/Z is no longer valid for targeting
       if (u === unit && hasPendingMove) {
-        // Healer is at effectiveX/Z (shadow), so distance is 0 - allowed
         return true;
       }
 
-      const distance = Math.abs(u.gridX - effectiveX) + Math.abs(u.gridZ - effectiveZ);
-      return distance <= 1; // Self (0) or adjacent (1) only
+      // Self-heal (distance 0) is always allowed
+      if (u.gridX === effectiveX && u.gridZ === effectiveZ) {
+        return true;
+      }
+
+      // Check if ally is adjacent (including diagonals)
+      if (!isAdjacent(effectiveX, effectiveZ, u.gridX, u.gridZ)) {
+        return false;
+      }
+
+      // Diagonals require LOS check, ordinals always have LOS
+      const isDiagonal = u.gridX !== effectiveX && u.gridZ !== effectiveZ;
+      const hasLOS = isDiagonal ? hasLineOfSight(effectiveX, effectiveZ, u.gridX, u.gridZ, unit) : true;
+      return hasLOS;
     });
   }
 
@@ -1655,6 +1928,7 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
   // ============================================
 
   // Highlight healable allies for Medic's Heal ability
+  // Works on self or all 8 adjacent tiles with LOS (diagonals require LOS check)
   function highlightHealTargets(unit: Unit, fromX?: number, fromZ?: number): void {
     clearHighlights();
     healableUnits = [];
@@ -1666,7 +1940,7 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
     const effectiveX = fromX ?? shadowPosition?.x ?? unit.gridX;
     const effectiveZ = fromZ ?? shadowPosition?.z ?? unit.gridZ;
 
-    // Can heal self or adjacent allies
+    // Can heal self or adjacent allies (all 8 directions with LOS)
     for (const ally of units) {
       if (ally.team !== unit.team) continue;
       if (ally.hp >= ally.maxHp) continue;  // Already at full health
@@ -1682,8 +1956,25 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
         continue;
       }
 
-      const distance = Math.abs(ally.gridX - effectiveX) + Math.abs(ally.gridZ - effectiveZ);
-      if (distance <= 1) {  // Self (0) or adjacent (1)
+      // Self-heal (distance 0) is always allowed
+      if (ally.gridX === effectiveX && ally.gridZ === effectiveZ) {
+        const tile = tiles[ally.gridX][ally.gridZ];
+        tile.material = healableMaterial;
+        highlightedTiles.push(tile);
+        healableUnits.push(ally);
+        continue;
+      }
+
+      // Check if ally is adjacent (including diagonals)
+      if (!isAdjacent(effectiveX, effectiveZ, ally.gridX, ally.gridZ)) {
+        continue;
+      }
+
+      // Diagonals require LOS check, ordinals always have LOS
+      const isDiagonal = ally.gridX !== effectiveX && ally.gridZ !== effectiveZ;
+      const hasLOS = isDiagonal ? hasLineOfSight(effectiveX, effectiveZ, ally.gridX, ally.gridZ, unit) : true;
+
+      if (hasLOS) {
         const tile = tiles[ally.gridX][ally.gridZ];
         tile.material = healableMaterial;
         highlightedTiles.push(tile);
@@ -1700,14 +1991,14 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
   }
 
   // Helper to apply conceal visual (semi-transparent with team color tint)
+  // Uses centralized alpha and emissive values
   function applyConcealVisual(unit: Unit): void {
     if (unit.modelMeshes) {
       unit.modelMeshes.forEach(mesh => {
         if (mesh.material) {
           const mat = mesh.material as PBRMaterial;
-          mat.alpha = 0.4;
-          // Add team color emissive tint
-          mat.emissiveColor = unit.teamColor.scale(0.4);
+          mat.alpha = CONCEAL_ALPHA;
+          mat.emissiveColor = unit.teamColor.scale(CONCEAL_EMISSIVE_SCALE);
         }
       });
     }
@@ -2010,8 +2301,8 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
 
     const cornerMat = new StandardMaterial(`coverPreviewMat_${tileX}_${tileZ}`, scene);
     cornerMat.diffuseColor = color;
-    cornerMat.emissiveColor = color.scale(0.2);
-    cornerMat.alpha = 0.2;  // More transparent for preview
+    cornerMat.emissiveColor = color.scale(COVER_PREVIEW_ALPHA);
+    cornerMat.alpha = COVER_PREVIEW_ALPHA;  // More transparent for preview
 
     // Create L-shaped corner markers at each corner
     const corners = [
@@ -2149,8 +2440,8 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
 
     const cornerMat = new StandardMaterial(`coverCornerMat_${unit.team}_${tileX}_${tileZ}`, scene);
     cornerMat.diffuseColor = color;
-    cornerMat.emissiveColor = color.scale(0.4);
-    cornerMat.alpha = 0.4;
+    cornerMat.emissiveColor = color.scale(COVER_ACTIVE_ALPHA);
+    cornerMat.alpha = COVER_ACTIVE_ALPHA;
 
     // Get or create mesh array for this unit
     if (!coverMeshesByUnit.has(unit)) {
@@ -2271,9 +2562,11 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
 
     if (player2Units.length === 0) {
       gameOver = true;
+      controllerManager.notifyGameEnd("player1");
       showGameOver(player1TeamColor, "Player 1");
     } else if (player1Units.length === 0) {
       gameOver = true;
+      controllerManager.notifyGameEnd("player2");
       showGameOver(player2TeamColor, "Player 2");
     }
   }
@@ -2326,13 +2619,13 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
     if (unit.hpBar) {
       const hpPercent = Math.max(0, unit.hp / unit.maxHp);
       unit.hpBar.width = `${30 * hpPercent}px`;
-      // Always update color based on current HP percentage
-      if (hpPercent < 0.3) {
-        unit.hpBar.background = "#ff4444";
-      } else if (hpPercent < 0.6) {
-        unit.hpBar.background = "#ffaa44";
+      // Update color based on HP percentage - using centralized thresholds and colors
+      if (hpPercent < HP_LOW_THRESHOLD) {
+        unit.hpBar.background = HP_BAR_RED;
+      } else if (hpPercent < HP_MEDIUM_THRESHOLD) {
+        unit.hpBar.background = HP_BAR_ORANGE;
       } else {
-        unit.hpBar.background = "#44ff44";  // Green when healthy
+        unit.hpBar.background = HP_BAR_GREEN;
       }
     }
   }
@@ -2416,7 +2709,10 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
   function queueMoveAction(unit: Unit, targetX: number, targetZ: number): void {
     if (!turnState) return;
 
-    // Add to pending actions
+    // Add command to queue
+    commandQueue.enqueue(createMoveCommand(targetX, targetZ));
+
+    // Also add to pending actions (for UI preview compatibility)
     turnState.pendingActions.push({
       type: "move",
       targetX,
@@ -2446,7 +2742,10 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
   function queueAttackAction(_attacker: Unit, defender: Unit): void {
     if (!turnState) return;
 
-    // Add to pending actions
+    // Add command to queue
+    commandQueue.enqueue(createAttackCommand(getUnitId(defender)));
+
+    // Also add to pending actions (for UI preview compatibility)
     turnState.pendingActions.push({
       type: "attack",
       targetUnit: defender,
@@ -2471,7 +2770,10 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
   function queueHealAction(_healer: Unit, target: Unit): void {
     if (!turnState) return;
 
-    // Add to pending actions
+    // Add command to queue
+    commandQueue.enqueue(createHealCommand(getUnitId(target)));
+
+    // Also add to pending actions (for UI preview compatibility)
     turnState.pendingActions.push({
       type: "ability",
       abilityName: "heal",
@@ -2503,7 +2805,10 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
       return;
     }
 
-    // Add to pending actions
+    // Add command to queue
+    commandQueue.enqueue(createConcealCommand());
+
+    // Also add to pending actions (for UI preview compatibility)
     turnState.pendingActions.push({
       type: "ability",
       abilityName: "conceal",
@@ -2524,7 +2829,10 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
   function queueCoverAction(unit: Unit): void {
     if (!turnState) return;
 
-    // Add to pending actions
+    // Add command to queue
+    commandQueue.enqueue(createCoverCommand());
+
+    // Also add to pending actions (for UI preview compatibility)
     turnState.pendingActions.push({
       type: "ability",
       abilityName: "cover",
@@ -2570,6 +2878,7 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
   }
 
   // Execute all queued actions sequentially
+  // Alternative: Use processCommandQueue(commandQueue, commandExecutor) for command-based execution
   function executeQueuedActions(): void {
     if (!turnState || turnState.pendingActions.length === 0) {
       endCurrentUnitTurn();
@@ -2579,6 +2888,12 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
     isExecutingActions = true;
     const unit = turnState.unit;
     const actions = [...turnState.pendingActions];
+
+    // Note: commandQueue contains the same actions as pendingActions
+    // To use the command pattern instead, replace the code below with:
+    // processCommandQueue(commandQueue, commandExecutor);
+    // return;
+    void processCommandQueue; // Mark as available for future use
 
     clearShadowPreview();
     clearAttackPreview();
@@ -2696,9 +3011,9 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
         return;
       }
 
-      // Apply damage (melee does 2x damage)
+      // Apply damage (melee does more damage - using centralized multiplier)
       const isMeleeAttack = attacker.customization?.combatStyle === "melee";
-      const damage = isMeleeAttack ? attacker.attack * 2 : attacker.attack;
+      const damage = isMeleeAttack ? attacker.attack * MELEE_DAMAGE_MULTIPLIER : attacker.attack;
       defender.hp -= damage;
       console.log(`${attacker.team} ${attacker.unitClass} attacks ${defender.team} ${defender.unitClass} for ${damage} damage! (${defender.hp}/${defender.maxHp} HP)`);
 
@@ -2738,7 +3053,7 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
           onComplete();
         });
       }
-    }, 300); // 300ms delay for attack animation to reach impact
+    }, ATTACK_IMPACT_DELAY_MS); // Delay for attack animation to reach impact
   }
 
   // Execute heal (called during execution phase)
@@ -2878,15 +3193,94 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
     }
   }
 
+  // ============================================
+  // COMMAND EXECUTOR
+  // ============================================
+  // Implements the CommandExecutor interface from /src/battle/commands.ts
+  // This allows actions to be executed via the command pattern.
+
+  /**
+   * Command executor implementation for the battle scene.
+   * Bridges between pure commands and visual execution.
+   */
+  const commandExecutor: CommandExecutor = {
+    executeMove(command, onComplete) {
+      if (!turnState) { onComplete(); return; }
+      const unit = turnState.unit;
+      animateMovement(unit, command.targetX, command.targetZ, () => {
+        updateCornerIndicators(unit);
+        onComplete();
+      });
+    },
+
+    executeAttack(command, onComplete) {
+      if (!turnState) { onComplete(); return; }
+      const unit = turnState.unit;
+      const target = findUnitById(command.targetUnitId);
+      if (!target || target.hp <= 0) { onComplete(); return; }
+      executeAttack(unit, target, onComplete);
+    },
+
+    executeHeal(command, onComplete) {
+      if (!turnState) { onComplete(); return; }
+      const unit = turnState.unit;
+      const target = findUnitById(command.targetUnitId);
+      if (!target) { onComplete(); return; }
+      executeHeal(unit, target, onComplete);
+    },
+
+    executeConceal(_command, onComplete) {
+      if (!turnState) { onComplete(); return; }
+      executeConceal(turnState.unit, onComplete);
+    },
+
+    executeCover(_command, onComplete) {
+      if (!turnState) { onComplete(); return; }
+      const unit = turnState.unit;
+      // Find final position from remaining commands
+      const lastMove = commandQueue.getLastMoveCommand();
+      const finalX = lastMove?.targetX ?? unit.gridX;
+      const finalZ = lastMove?.targetZ ?? unit.gridZ;
+      executeCover(unit, onComplete, finalX, finalZ);
+    },
+
+    onQueueComplete() {
+      if (turnState) {
+        faceClosestEnemy(turnState.unit);
+      }
+      isExecutingActions = false;
+      endCurrentUnitTurn();
+    },
+
+    checkReactions(onReactionComplete) {
+      if (!turnState || turnState.unit.hp <= 0) return false;
+      return checkAndTriggerCoverReaction(turnState.unit, () => {
+        faceClosestEnemy(turnState!.unit);
+        isExecutingActions = false;
+        endCurrentUnitTurn();
+        onReactionComplete();
+      });
+    },
+  };
+
+  // Export command executor for external use (AI, network play)
+  void commandExecutor;
+
+  // ============================================
+  // UNDO SYSTEM
+  // ============================================
+
   // Undo the last queued action
   function undoLastAction(): void {
     if (!turnState || turnState.pendingActions.length === 0) return;
 
+    // Pop from both queues
+    const lastCommand = commandQueue.pop();
     const lastAction = turnState.pendingActions.pop();
     turnState.actionsRemaining++;
 
     // If it was a move, clear the shadow preview and update cover preview
-    if (lastAction?.type === "move") {
+    if (lastAction?.type === "move" || lastCommand?.type === "move") {
       clearShadowPreview();
       shadowPosition = null;
       updateCoverPreview();  // Update in case cover depends on position
@@ -2896,11 +3290,36 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
     if (lastAction?.type === "ability" && lastAction.abilityName === "cover") {
       clearCoverPreview();
     }
+    if (lastCommand?.type === "cover") {
+      clearCoverPreview();
+    }
 
     // Update intent indicators to reflect remaining actions
     updateIntentIndicators();
 
     updateCommandMenu();
+
+    // Restore highlights based on current action mode
+    if (selectedUnit && currentUnit) {
+      const effectiveX = shadowPosition?.x ?? currentUnit.gridX;
+      const effectiveZ = shadowPosition?.z ?? currentUnit.gridZ;
+
+      switch (currentActionMode) {
+        case "move":
+          highlightValidActions(selectedUnit);
+          break;
+        case "attack":
+          highlightAttackTargets(selectedUnit, effectiveX, effectiveZ);
+          break;
+        case "ability":
+          highlightHealTargets(selectedUnit, effectiveX, effectiveZ);
+          break;
+        default:
+          // No specific mode, just ensure active tile is highlighted
+          clearHighlights();
+          break;
+      }
+    }
   }
 
   // Click handling
@@ -3248,6 +3667,12 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
       return;
     }
 
+    // Hide menu for AI-controlled units
+    if (controllerManager.isAI(currentUnit.team)) {
+      commandMenu.isVisible = false;
+      return;
+    }
+
     commandMenu.isVisible = true;
 
     // Position menu based on team (P1 = left, P2 = right)
@@ -3282,9 +3707,9 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
       attackBtn.textBlock.text = isMelee ? "Strike" : "Shoot";
     }
 
-    // Update actions text from turnState
+    // Update actions text from turnState (using centralized constant)
     const remaining = turnState?.actionsRemaining ?? 0;
-    menuActionsText.text = `Actions: ${remaining}/2`;
+    menuActionsText.text = `Actions: ${remaining}/${ACTIONS_PER_TURN}`;
 
     // Update preview section
     updateMenuPreview();
@@ -3396,22 +3821,21 @@ async function createUnit(
   // Hide model initially until facing is set (prevents wrong-direction flash)
   modelRoot.setEnabled(false);
 
-  // Position and scale the model
-  const modelScale = 0.5;
+  // Position and scale the model - using centralized constants
   modelRoot.position = new Vector3(
     gridX * TILE_SIZE - gridOffset,
-    0.05,  // Lowered since base disc was removed
+    BATTLE_MODEL_Y_POSITION,
     gridZ * TILE_SIZE - gridOffset
   );
   modelRoot.scaling = new Vector3(
-    c.handedness === "right" ? -modelScale : modelScale,
-    modelScale,
-    modelScale
+    c.handedness === "right" ? -BATTLE_MODEL_SCALE : BATTLE_MODEL_SCALE,
+    BATTLE_MODEL_SCALE,
+    BATTLE_MODEL_SCALE
   );
 
   // Apply customizations to the model
-  // Head visibility
-  for (let i = 0; i < 4; i++) {
+  // Head visibility (using centralized constant)
+  for (let i = 0; i < HEAD_VARIANT_COUNT; i++) {
     const headName = `Head_00${i + 1}`;
     const headMeshes = modelMeshes.filter(m => m.name.includes(headName));
     headMeshes.forEach(mesh => mesh.setEnabled(i === c.head));
@@ -3457,29 +3881,29 @@ async function createUnit(
   const hpBarAnchor = MeshBuilder.CreateBox(`${team}_${unitClass}_anchor_${gridX}_${gridZ}`, { size: 0.01 }, scene);
   hpBarAnchor.position = new Vector3(
     gridX * TILE_SIZE - gridOffset,
-    1.2,  // Approximate head height
+    HP_BAR_ANCHOR_HEIGHT,
     gridZ * TILE_SIZE - gridOffset
   );
   hpBarAnchor.isVisible = false;
   hpBarAnchor.metadata = { type: "unit", unitClass, team };
 
-  // HP bar background
+  // HP bar background - using centralized colors
   const hpBarBg = new Rectangle();
   hpBarBg.width = "34px";
   hpBarBg.height = "6px";
-  hpBarBg.background = "#333333";
+  hpBarBg.background = HP_BAR_BACKGROUND;
   hpBarBg.thickness = 1;
-  hpBarBg.color = "#000000";
+  hpBarBg.color = HP_BAR_BORDER;
   hpBarBg.isVisible = false;  // Hide until model is ready
   gui.addControl(hpBarBg);
   hpBarBg.linkWithMesh(hpBarAnchor);
   hpBarBg.linkOffsetY = -50;
 
-  // HP bar fill
+  // HP bar fill - using centralized colors
   const hpBar = new Rectangle();
   hpBar.width = "30px";
   hpBar.height = "4px";
-  hpBar.background = "#44ff44";
+  hpBar.background = HP_BAR_GREEN;
   hpBar.horizontalAlignment = Rectangle.HORIZONTAL_ALIGNMENT_LEFT;
   hpBar.left = "2px";
   hpBarBg.addControl(hpBar);
@@ -3529,11 +3953,11 @@ function moveUnit(unit: Unit, newX: number, newZ: number, gridOffset: number): v
   const newPosX = newX * TILE_SIZE - gridOffset;
   const newPosZ = newZ * TILE_SIZE - gridOffset;
 
-  // Move HP bar anchor
-  unit.mesh.position = new Vector3(newPosX, 1.2, newPosZ);
+  // Move HP bar anchor (using centralized height constant)
+  unit.mesh.position = new Vector3(newPosX, HP_BAR_ANCHOR_HEIGHT, newPosZ);
 
-  // Move 3D model
+  // Move 3D model (using centralized Y position constant)
   if (unit.modelRoot) {
-    unit.modelRoot.position = new Vector3(newPosX, 0.05, newPosZ);
+    unit.modelRoot.position = new Vector3(newPosX, BATTLE_MODEL_Y_POSITION, newPosZ);
   }
 }

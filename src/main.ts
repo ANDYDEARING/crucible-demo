@@ -3,15 +3,34 @@ import { createStartScene } from "./scenes/StartScene";
 import { createTitleScene } from "./scenes/TitleScene";
 import { createLoadoutScene } from "./scenes/LoadoutScene";
 import { createBattleScene } from "./scenes/BattleScene";
-import type { Loadout } from "./types";
+import type { Loadout, SceneName, GameMode } from "./types";
 
-export type SceneName = "start" | "title" | "loadout" | "battle";
+// Re-export for backwards compatibility
+export type { SceneName } from "./types";
 
 const canvas = document.getElementById("game-canvas") as HTMLCanvasElement;
 const engine = new Engine(canvas, true);
 
 let currentScene: Scene;
 let currentLoadout: Loadout | null = null;
+let currentGameMode: GameMode = "local-pvp";
+let currentHumanTeam: "player1" | "player2" = "player1";
+
+/** Set game mode before navigating to loadout */
+export function setGameMode(mode: GameMode, humanTeam?: "player1" | "player2"): void {
+  currentGameMode = mode;
+  if (humanTeam) {
+    currentHumanTeam = humanTeam;
+  } else if (mode === "local-pve") {
+    // Player 1 is always human in PvE, Player 2 is computer
+    currentHumanTeam = "player1";
+  }
+}
+
+/** Get current game mode */
+export function getGameMode(): { mode: GameMode; humanTeam: "player1" | "player2" } {
+  return { mode: currentGameMode, humanTeam: currentHumanTeam };
+}
 
 export function navigateTo(sceneName: SceneName): void {
   if (currentScene) {

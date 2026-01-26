@@ -5,8 +5,18 @@ import {
   Vector3,
   Color4,
 } from "@babylonjs/core";
-import { AdvancedDynamicTexture, TextBlock, StackPanel, Rectangle, Control } from "@babylonjs/gui";
-import type { SceneName } from "../main";
+import { AdvancedDynamicTexture, TextBlock, StackPanel, Rectangle, Control, Button } from "@babylonjs/gui";
+import type { SceneName, GameMode } from "../types";
+import { setGameMode } from "../main";
+import {
+  SCENE_BACKGROUNDS,
+  TITLE_HEAT_COLORS,
+  TITLE_TEXT_COLORS,
+  TITLE_FADE_IN_DURATION,
+  TITLE_FADE_IN_DELAY,
+} from "../config";
+import { MUSIC, AUDIO_VOLUMES, LOOP_BUFFER_TIME, DEBUG_SKIP_OFFSET } from "../config";
+import { createMusicPlayer } from "../utils";
 
 // Ember particle for floating fire effect
 interface Ember {
@@ -26,25 +36,20 @@ export function createTitleScene(
   navigateTo: (scene: SceneName) => void
 ): Scene {
   const scene = new Scene(engine);
-  // Deep black with subtle warm undertone
-  scene.clearColor = new Color4(0.02, 0.01, 0.01, 1);
 
-  // Background music
-  const music = new Audio("/audio/rise_above_loop_v3.m4a");
-  music.loop = true;
-  music.volume = 0.5;
-  music.addEventListener("timeupdate", () => {
-    if (music.duration && music.currentTime >= music.duration - 0.5) {
-      music.currentTime = 0;
-    }
-  });
+  // Use centralized scene background color (deep black with subtle warm undertone)
+  const bg = SCENE_BACKGROUNDS.title;
+  scene.clearColor = new Color4(bg.r, bg.g, bg.b, bg.a);
+
+  // Background music - using centralized audio config
+  const music = createMusicPlayer(MUSIC.title, AUDIO_VOLUMES.music, true, LOOP_BUFFER_TIME);
   music.play();
 
-  // Press S to skip to 10 seconds before end (to test loop)
+  // Press S to skip to near end (to test loop behavior)
   const skipHandler = (e: KeyboardEvent) => {
     if (e.key === "s" || e.key === "S") {
       if (music.duration) {
-        music.currentTime = Math.max(0, music.duration - 10);
+        music.currentTime = Math.max(0, music.duration - DEBUG_SKIP_OFFSET);
       }
     }
   };
@@ -70,13 +75,9 @@ export function createTitleScene(
   baseGlow.background = "linear-gradient(to top, rgba(139, 35, 0, 0.35) 0%, rgba(80, 20, 0, 0.15) 30%, rgba(30, 8, 0, 0.05) 50%, transparent 70%)";
   gui.addControl(baseGlow);
 
-  // Pulsing heat layers
+  // Pulsing heat layers - using centralized color palette
   const heatLayers: Rectangle[] = [];
-  const heatColors = [
-    { r: 180, g: 50, b: 0 },   // Deep orange-red
-    { r: 255, g: 80, b: 0 },   // Bright orange
-    { r: 255, g: 120, b: 20 }, // Amber
-  ];
+  const heatColors = TITLE_HEAT_COLORS;
 
   for (let i = 0; i < 3; i++) {
     const heat = new Rectangle();
@@ -91,6 +92,9 @@ export function createTitleScene(
   // === FLOATING EMBERS ===
   // (added after title panel so they appear on top)
   const embers: Ember[] = [];
+
+  // Mode buttons array (populated later, used in animation)
+  const modeButtons: Button[] = [];
 
   // === ANIMATION LOOP ===
   let time = 0;
@@ -150,7 +154,10 @@ export function createTitleScene(
       titleLine1.color = `rgba(232, 196, 160, ${ease})`;
       titleLine2.color = `rgba(255, 179, 102, ${ease})`;
       divider.background = `rgba(255, 150, 80, ${ease * 0.4})`;
-      playButton.alpha = ease;
+      // Fade in mode buttons
+      for (const btn of modeButtons) {
+        btn.alpha = ease;
+      }
     }
 
     // Subtle title glow pulse (only after fade-in started)
@@ -168,11 +175,11 @@ export function createTitleScene(
   panel.top = "-5%";
   gui.addControl(panel);
 
-  // Fade-in state
+  // Fade-in state - using centralized timing constants
   let fadeInStarted = false;
   let fadeInAlpha = 0;
-  const fadeInDuration = 1.5; // seconds
-  const fadeInDelay = 0.3; // seconds before fade starts
+  const fadeInDuration = TITLE_FADE_IN_DURATION;
+  const fadeInDelay = TITLE_FADE_IN_DELAY;
 
   // Main title - Bebas Neue for that industrial T2 feel
   const titleLine1 = new TextBlock();
@@ -214,62 +221,85 @@ export function createTitleScene(
   spacer.text = "";
   panel.addControl(spacer);
 
-  // Start fade-in after fonts load
-  document.fonts.load("36px 'Bebas Neue'").then(() => {
-    document.fonts.load("96px 'Bebas Neue'").then(() => {
-      setTimeout(() => {
-        fadeInStarted = true;
-      }, fadeInDelay * 1000);
-    });
-  });
-
-  // === PLAY BUTTON - minimal, understated ===
-  const playButton = new Rectangle();
-  playButton.width = "180px";
-  playButton.height = "45px";
-  playButton.background = "rgba(40, 20, 15, 0.6)";
-  playButton.cornerRadius = 2;
-  playButton.thickness = 1;
-  playButton.color = "#b89070";
-  playButton.hoverCursor = "pointer";
-  playButton.alpha = 0; // Start invisible, fade in with title
-
-  const buttonText = new TextBlock();
-  buttonText.text = "B E G I N";
-  buttonText.color = "#b89070";
-  buttonText.fontFamily = "'Bebas Neue', 'Arial Black', sans-serif";
-  buttonText.fontSize = 22;
-  playButton.addControl(buttonText);
-
-  // Re-render text after fonts load to fix centering
-  document.fonts.load("22px 'Bebas Neue'").then(() => {
-    // Small delay to ensure GUI has processed the font
+  // Start fade-in after fonts load (including button font size)
+  Promise.all([
+    document.fonts.load("36px 'Bebas Neue'"),
+    document.fonts.load("96px 'Bebas Neue'"),
+    document.fonts.load("20px 'Bebas Neue'"),
+  ]).then(() => {
+    // Force buttons to recalculate layout now that fonts are loaded
+    for (const btn of modeButtons) {
+      btn.markAsDirty();
+      if (btn.textBlock) {
+        btn.textBlock.markAsDirty();
+      }
+    }
     setTimeout(() => {
-      buttonText.text = "B E G I N ";
-      setTimeout(() => {
-        buttonText.text = "B E G I N";
-      }, 50);
-    }, 100);
+      fadeInStarted = true;
+    }, fadeInDelay * 1000);
   });
 
-  // Hover effects
-  playButton.onPointerEnterObservable.add(() => {
-    playButton.background = "rgba(100, 50, 25, 0.8)";
-    buttonText.color = "#ffd0a0";
-    playButton.shadowColor = "rgba(255, 120, 50, 0.6)";
-    playButton.shadowBlur = 15;
-  });
-  playButton.onPointerOutObservable.add(() => {
-    playButton.background = "rgba(40, 20, 15, 0.6)";
-    buttonText.color = "#b89070";
-    playButton.shadowColor = "transparent";
-    playButton.shadowBlur = 0;
-  });
+  // === MODE SELECTION BUTTONS ===
+  // Helper to create a styled button
+  function createModeButton(text: string, mode: GameMode): Button {
+    const button = Button.CreateSimpleButton(`mode_${mode}`, text);
+    button.width = "200px";
+    button.height = "45px";
+    button.background = "rgba(40, 20, 15, 0.6)";
+    button.cornerRadius = 2;
+    button.thickness = 1;
+    button.color = "#b89070";
+    button.hoverCursor = "pointer";
+    button.alpha = 0; // Start invisible, fade in with title
 
-  playButton.onPointerClickObservable.add(() => {
-    navigateTo("loadout");
-  });
-  panel.addControl(playButton);
+    // Style the text block
+    if (button.textBlock) {
+      button.textBlock.color = TITLE_TEXT_COLORS.buttonText;
+      button.textBlock.fontFamily = "'Bebas Neue', 'Arial Black', sans-serif";
+      button.textBlock.fontSize = 20;
+    }
+
+    // Hover effects
+    button.onPointerEnterObservable.add(() => {
+      button.background = "rgba(100, 50, 25, 0.8)";
+      if (button.textBlock) {
+        button.textBlock.color = TITLE_TEXT_COLORS.buttonHover;
+      }
+      button.shadowColor = "rgba(255, 120, 50, 0.6)";
+      button.shadowBlur = 15;
+    });
+    button.onPointerOutObservable.add(() => {
+      button.background = "rgba(40, 20, 15, 0.6)";
+      if (button.textBlock) {
+        button.textBlock.color = TITLE_TEXT_COLORS.buttonText;
+      }
+      button.shadowColor = "transparent";
+      button.shadowBlur = 0;
+    });
+
+    button.onPointerClickObservable.add(() => {
+      setGameMode(mode);
+      navigateTo("loadout");
+    });
+
+    return button;
+  }
+
+  // Local PvP button
+  const pvpButton = createModeButton("L O C A L   P V P", "local-pvp");
+  panel.addControl(pvpButton);
+  modeButtons.push(pvpButton);
+
+  // Small spacer between buttons
+  const buttonSpacer = new TextBlock();
+  buttonSpacer.height = "15px";
+  buttonSpacer.text = "";
+  panel.addControl(buttonSpacer);
+
+  // Local PvE button
+  const pveButton = createModeButton("L O C A L   P V E", "local-pve");
+  panel.addControl(pveButton);
+  modeButtons.push(pveButton);
 
   // === CREATE EMBERS (after panel so they render on top) ===
   const numEmbers = 30;

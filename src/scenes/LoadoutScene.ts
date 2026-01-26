@@ -2,7 +2,6 @@ import {
   Engine,
   Scene,
   Color4,
-  Color3,
   Vector3,
   ArcRotateCamera,
   HemisphericLight,
@@ -24,53 +23,30 @@ import {
   Image,
 } from "@babylonjs/gui";
 import { ALL_CLASSES, getClassData, Loadout, UnitSelection, UnitCustomization, UnitClass } from "../types";
+import { getGameMode } from "../main";
 
-// Color palette options
-const SKIN_TONES = [
-  "#FFDFC4",  // Light
-  "#E8C0A0",
-  "#D0A080",
-  "#B08060",
-  "#906040",
-  "#704828",
-  "#503418",
-  "#352210",
-  "#1E1208",
-  "#0A0604",  // Near black
-];
-const HAIR_COLORS = [
-  "#0A0A0A",  // Black
-  "#4A3728",  // Brown
-  "#E5C8A8",  // Blond
-  "#B55239",  // Reddish-orange
-  "#C0C0C0",  // Silver
-  "#FF2222",  // Bright red
-  "#FF66AA",  // Bright pink
-  "#9933FF",  // Purple
-  "#22CC44",  // Green
-  "#2288FF",  // Blue
-];
-const EYE_COLORS = [
-  "#2288FF",  // Blue
-  "#22AA44",  // Green
-  "#634E34",  // Brown
-  "#DD2222",  // Red
-  "#9933FF",  // Purple
-  "#FFFFFF",  // White
-  "#0A0A0A",  // Black
-  "#FF8800",  // Orange
-];
-
-// Team colors available for selection
-const TEAM_COLORS = [
-  { name: "Red", hex: "#DD3333" },
-  { name: "Orange", hex: "#FF8800" },
-  { name: "Blue", hex: "#3366DD" },
-  { name: "Green", hex: "#33AA44" },
-  { name: "Purple", hex: "#8833CC" },
-  { name: "Pink", hex: "#DD66AA" },
-  { name: "Yellow", hex: "#DDBB22" },
-];
+// Import centralized config
+import {
+  SKIN_TONES,
+  HAIR_COLORS,
+  EYE_COLORS,
+  TEAM_COLORS,
+  SCENE_BACKGROUNDS,
+  UI_COLORS,
+  DEFAULT_PLAYER1_COLOR_INDEX,
+  DEFAULT_PLAYER2_COLOR_INDEX,
+  PREVIEW_CAMERA_ALPHA,
+  PREVIEW_CAMERA_BETA,
+  PREVIEW_RTT_SIZE,
+  PREVIEW_ZOOM_PRESETS,
+  PREVIEW_ZOOM_LERP_SPEED,
+  PREVIEW_MODEL_OFFSET,
+  PREVIEW_MODEL_SCALE,
+  MAX_DISPLAY_COLORS,
+  UNITS_PER_TEAM,
+} from "../config";
+import { MUSIC, AUDIO_VOLUMES, LOOP_BUFFER_TIME, DEBUG_SKIP_OFFSET } from "../config";
+import { hexToColor3, createMusicPlayer } from "../utils";
 
 export function createLoadoutScene(
   engine: Engine,
@@ -78,24 +54,20 @@ export function createLoadoutScene(
   onStartBattle: (loadout: Loadout) => void
 ): Scene {
   const scene = new Scene(engine);
-  scene.clearColor = new Color4(0.08, 0.08, 0.12, 1);
 
-  // Loadout music
-  const music = new Audio("/audio/Loadout.m4a");
-  music.loop = true;
-  music.volume = 0.5;
-  music.addEventListener("timeupdate", () => {
-    if (music.duration && music.currentTime >= music.duration - 0.5) {
-      music.currentTime = 0;
-    }
-  });
+  // Use centralized scene background color
+  const bg = SCENE_BACKGROUNDS.loadout;
+  scene.clearColor = new Color4(bg.r, bg.g, bg.b, bg.a);
+
+  // Loadout music - using centralized audio config
+  const music = createMusicPlayer(MUSIC.loadout, AUDIO_VOLUMES.music, true, LOOP_BUFFER_TIME);
   music.play();
 
-  // Press S to skip to 10 seconds before end (to test loop)
+  // Press S to skip to near end (to test loop behavior)
   const skipHandler = (e: KeyboardEvent) => {
     if (e.key === "s" || e.key === "S") {
       if (music.duration) {
-        music.currentTime = Math.max(0, music.duration - 10);
+        music.currentTime = Math.max(0, music.duration - DEBUG_SKIP_OFFSET);
       }
     }
   };
@@ -129,12 +101,17 @@ export function createLoadoutScene(
   mainGrid.addRowDefinition(1);
   gui.addControl(mainGrid);
 
-  // Track selections
+  // Track selections - using centralized default color indices
+  // Get game mode that was set when user selected from title screen
+  const { mode: gameMode, humanTeam } = getGameMode();
+
   const selections: Loadout = {
     player1: [],
     player2: [],
-    player1TeamColor: TEAM_COLORS[2].hex,  // Default blue
-    player2TeamColor: TEAM_COLORS[0].hex,   // Default red
+    player1TeamColor: TEAM_COLORS[DEFAULT_PLAYER1_COLOR_INDEX].hex,
+    player2TeamColor: TEAM_COLORS[DEFAULT_PLAYER2_COLOR_INDEX].hex,
+    gameMode,
+    humanTeam,
   };
 
   // Track team color UI refresh callbacks
@@ -163,19 +140,7 @@ export function createLoadoutScene(
 
   const previews: { left?: UnitPreview; right?: UnitPreview } = {};
 
-  // Zoom presets: [radius, targetY]
-  const ZOOM_PRESETS = [
-    { radius: 3, targetY: 0.7, name: "Full Body" },
-    { radius: 1.7, targetY: 1.0, name: "Torso & Head" }
-  ];
-
-  // Helper to convert hex color to Color3
-  function hexToColor3(hex: string): Color3 {
-    const r = parseInt(hex.slice(1, 3), 16) / 255;
-    const g = parseInt(hex.slice(3, 5), 16) / 255;
-    const b = parseInt(hex.slice(5, 7), 16) / 255;
-    return new Color3(r, g, b);
-  }
+  // Note: PREVIEW_ZOOM_PRESETS, hexToColor3 are now imported from config/utils
 
   function updatePreview(preview: UnitPreview | undefined, c: UnitCustomization, unitClass: UnitClass | null): void {
     if (!preview || !unitClass) return;
@@ -244,8 +209,7 @@ export function createLoadoutScene(
 
     // Handedness - flip X scale (model is reversed by default due to Babylon/Blender axis swap)
     // Right-handed = flip to correct, Left-handed = keep reversed
-    const baseScale = 0.9;
-    activeModel.root.scaling.x = c.handedness === "right" ? -baseScale : baseScale;
+    activeModel.root.scaling.x = c.handedness === "right" ? -PREVIEW_MODEL_SCALE : PREVIEW_MODEL_SCALE;
   }
 
   async function createUnitPreview(
@@ -253,21 +217,23 @@ export function createLoadoutScene(
     previewRect: Rectangle
   ): Promise<UnitPreview> {
     // Position model far away so main camera doesn't see it
-    const modelOffset = side === "left" ? -100 : 100;
+    const modelOffset = side === "left" ? -PREVIEW_MODEL_OFFSET : PREVIEW_MODEL_OFFSET;
 
     // Use square RTT - image will be sized to fill height and clip width
-    const rttSize = 768;
+    const rttSize = PREVIEW_RTT_SIZE;
 
     // Create square RTT
     const rtt = new RenderTargetTexture(`rtt_${side}`, rttSize, scene, false);
-    rtt.clearColor = new Color4(0.3, 0.32, 0.38, 1);  // Lighter background to see dark elements
+    // Use centralized RTT preview background color
+    const rttBg = SCENE_BACKGROUNDS.rttPreview;
+    rtt.clearColor = new Color4(rttBg.r, rttBg.g, rttBg.b, rttBg.a);
     scene.customRenderTargets.push(rtt);
 
-    // === PREVIEW CAMERA SETTINGS ===
-    const camAlpha = 4.1;                       // Horizontal angle
-    const camBeta = Math.PI / 2.5;              // Vertical angle
-    const camRadius = ZOOM_PRESETS[0].radius;   // Start at full body
-    const camTargetY = ZOOM_PRESETS[0].targetY;
+    // Preview camera settings - using centralized constants
+    const camAlpha = PREVIEW_CAMERA_ALPHA;
+    const camBeta = PREVIEW_CAMERA_BETA;
+    const camRadius = PREVIEW_ZOOM_PRESETS[0].radius;
+    const camTargetY = PREVIEW_ZOOM_PRESETS[0].targetY;
     // ================================
 
     const previewCamera = new ArcRotateCamera(
@@ -294,17 +260,17 @@ export function createLoadoutScene(
     const previewLayer = side === "left" ? 0x10000000 : 0x20000000;
     previewCamera.layerMask = previewLayer;
 
-    // Team color - use selected color or default
+    // Team color - use selected color or default (using centralized indices)
     const teamColorHex = side === "left"
-      ? (selections.player1TeamColor || TEAM_COLORS[2].hex)
-      : (selections.player2TeamColor || TEAM_COLORS[0].hex);
+      ? (selections.player1TeamColor || TEAM_COLORS[DEFAULT_PLAYER1_COLOR_INDEX].hex)
+      : (selections.player2TeamColor || TEAM_COLORS[DEFAULT_PLAYER2_COLOR_INDEX].hex);
     const teamColor = hexToColor3(teamColorHex);
 
     // Helper to set up a model
     const setupModel = (result: { meshes: AbstractMesh[]; animationGroups: AnimationGroup[] }): ModelData => {
       const root = result.meshes[0];
       root.position = new Vector3(modelOffset, 0, 0);
-      root.scaling = new Vector3(0.9, 0.9, 0.9);
+      root.scaling = new Vector3(PREVIEW_MODEL_SCALE, PREVIEW_MODEL_SCALE, PREVIEW_MODEL_SCALE);
 
       // Add meshes to RTT render list and set layer mask
       result.meshes.forEach(m => {
@@ -388,7 +354,9 @@ export function createLoadoutScene(
     let frameCount = 0;
     rtt.onAfterRenderObservable.add(() => {
       frameCount++;
-      if (frameCount % 3 !== 0) return; // Update every 3rd frame (~20fps) for smoother interaction
+      // Throttle RTT updates for performance (using centralized constant)
+      // Import RTT_UPDATE_FRAME_DIVISOR from config if needed
+      if (frameCount % 3 !== 0) return;
 
       rtt.readPixels()?.then((buffer) => {
         if (!buffer) return;
@@ -425,9 +393,16 @@ export function createLoadoutScene(
     return preview;
   }
 
-  // Create player panels
-  const player1Panel = createPlayerPanel("Player 1", "#4488ff", selections.player1, "left");
-  const player2Panel = createPlayerPanel("Player 2", "#ff8844", selections.player2, "right");
+  // Create player panels - show "Computer" label for AI-controlled team in PvE
+  const player1Name = gameMode === "local-pve" && humanTeam !== "player1"
+    ? "Computer"
+    : "Player 1";
+  const player2Name = gameMode === "local-pve" && humanTeam !== "player2"
+    ? "Computer"
+    : "Player 2";
+
+  const player1Panel = createPlayerPanel(player1Name, "#4488ff", selections.player1, "left");
+  const player2Panel = createPlayerPanel(player2Name, "#ff8844", selections.player2, "right");
 
   mainGrid.addControl(player1Panel, 0, 0);
   mainGrid.addControl(player2Panel, 0, 1);
@@ -459,14 +434,14 @@ export function createLoadoutScene(
   startBtn.isEnabled = false;
   startBtn.alpha = 0.5;
   startBtn.onPointerClickObservable.add(() => {
-    if (selections.player1.length === 3 && selections.player2.length === 3) {
+    if (selections.player1.length === UNITS_PER_TEAM && selections.player2.length === UNITS_PER_TEAM) {
       onStartBattle(selections);
     }
   });
   gui.addControl(startBtn);
 
   function updateStartButton(): void {
-    const ready = selections.player1.length === 3 && selections.player2.length === 3;
+    const ready = selections.player1.length === UNITS_PER_TEAM && selections.player2.length === UNITS_PER_TEAM;
     startBtn.isEnabled = ready;
     startBtn.alpha = ready ? 1 : 0.5;
     startBtn.background = ready ? "#448844" : "#444444";
@@ -687,7 +662,7 @@ export function createLoadoutScene(
         selectionArray.length = 0;
 
         // Generate 3 random units
-        for (let i = 0; i < 3; i++) {
+        for (let i = 0; i < UNITS_PER_TEAM; i++) {
           const randomClass = ALL_CLASSES[Math.floor(Math.random() * ALL_CLASSES.length)];
           const randomCustomization: UnitCustomization = {
             body: Math.random() > 0.5 ? "male" : "female",
@@ -725,7 +700,7 @@ export function createLoadoutScene(
       } else {
         const names = selectionArray.map(u => getClassData(u.unitClass).name);
         selectionDisplay.text = `Selected: ${names.join(", ")}`;
-        selectionDisplay.color = selectionArray.length === 3 ? "#44ff44" : "#ff6666";
+        selectionDisplay.color = selectionArray.length === UNITS_PER_TEAM ? UI_COLORS.textSuccess : UI_COLORS.textError;
       }
     };
 
@@ -956,17 +931,17 @@ export function createLoadoutScene(
       }
     });
 
-    // Zoom preset cycling with smooth animation
+    // Zoom preset cycling with smooth animation (explicit types to avoid literal type inference)
     let currentZoomIndex = 0;
-    let targetRadius = ZOOM_PRESETS[0].radius;
-    let targetTargetY = ZOOM_PRESETS[0].targetY;
+    let targetRadius: number = PREVIEW_ZOOM_PRESETS[0].radius;
+    let targetTargetY: number = PREVIEW_ZOOM_PRESETS[0].targetY;
     let isAnimating = false;
 
     // Animate camera towards target values
     scene.onBeforeRenderObservable.add(() => {
       if (previews[side] && isAnimating) {
         const cam = previews[side]!.previewCamera;
-        const lerpSpeed = 0.08;
+        const lerpSpeed = PREVIEW_ZOOM_LERP_SPEED;
 
         cam.radius += (targetRadius - cam.radius) * lerpSpeed;
         cam.target.y += (targetTargetY - cam.target.y) * lerpSpeed;
@@ -991,11 +966,11 @@ export function createLoadoutScene(
         // Scroll down (positive) = zoom out, scroll up (negative) = zoom in
         if (evt.y > 0 && currentZoomIndex > 0) {
           currentZoomIndex--;
-        } else if (evt.y < 0 && currentZoomIndex < ZOOM_PRESETS.length - 1) {
+        } else if (evt.y < 0 && currentZoomIndex < PREVIEW_ZOOM_PRESETS.length - 1) {
           currentZoomIndex++;
         }
 
-        const preset = ZOOM_PRESETS[currentZoomIndex];
+        const preset = PREVIEW_ZOOM_PRESETS[currentZoomIndex];
         targetRadius = preset.radius;
         targetTargetY = preset.targetY;
         isAnimating = true;
@@ -1029,7 +1004,7 @@ export function createLoadoutScene(
     addBtn.fontSize = 14;
     addBtn.fontWeight = "bold";
     addBtn.onPointerClickObservable.add(() => {
-      if (selectionArray.length < 3 && selectedClass) {
+      if (selectionArray.length < UNITS_PER_TEAM && selectedClass) {
         selectionArray.push({
           unitClass: selectedClass,
           customization: { ...currentCustomization }
@@ -1078,7 +1053,7 @@ export function createLoadoutScene(
         infoText.color = "#888888";
       });
       btn.onPointerClickObservable.add(() => {
-        if (selectionArray.length < 3) {
+        if (selectionArray.length < UNITS_PER_TEAM) {
           openCustomization(unitClass);
         }
       });
@@ -1132,8 +1107,8 @@ export function createLoadoutScene(
     return row;
   }
 
-  // Helper: color chooser
-  function createColorChooser(label: string, colors: string[], defaultIdx: number, onChange: (idx: number) => void): StackPanel {
+  // Helper: color chooser (accepts readonly arrays from config)
+  function createColorChooser(label: string, colors: readonly string[], defaultIdx: number, onChange: (idx: number) => void): StackPanel {
     const row = new StackPanel();
     row.height = "42px";
     row.paddingLeft = "3px";
@@ -1154,8 +1129,8 @@ export function createLoadoutScene(
     row.addControl(swatchRow);
 
     const swatches: Rectangle[] = [];
-    // Show max 8 colors to fit
-    const displayColors = colors.slice(0, 8);
+    // Show max colors that fit in UI (using centralized constant)
+    const displayColors = colors.slice(0, MAX_DISPLAY_COLORS);
     displayColors.forEach((color, i) => {
       const swatch = new Rectangle();
       swatch.width = "14px";
