@@ -61,6 +61,7 @@ export type GameMode = "local-pvp" | "local-pve";
 export interface UnitSelection {
   unitClass: UnitClass;
   customization?: UnitCustomization;
+  boost?: number;  // Boost selection (0, 1, or 2) - feature coming soon
 }
 
 /** Complete loadout configuration for a battle */
