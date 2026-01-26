@@ -26,9 +26,6 @@ export const TILE_GAP = 0.05;
 /** Number of random terrain cubes to generate */
 export const TERRAIN_COUNT = 10;
 
-/** Maximum attempts to generate valid terrain before giving up */
-export const TERRAIN_GENERATION_MAX_ATTEMPTS = 100;
-
 // =============================================================================
 // SPAWN POSITIONS
 // =============================================================================

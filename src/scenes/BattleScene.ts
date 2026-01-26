@@ -56,6 +56,7 @@ import {
   GRID_SIZE,
   TILE_SIZE,
   TILE_GAP,
+  TERRAIN_COUNT,
   PLAYER1_SPAWN_POSITIONS,
   PLAYER2_SPAWN_POSITIONS,
   BATTLE_CAMERA_ALPHA,
@@ -253,102 +254,104 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
   // Store terrain positions for collision checking
   const terrainTiles: Set<string> = new Set();
 
-  // Starting positions to avoid
-  const spawnPositions = [
-    { x: 1, z: 1 }, { x: 3, z: 0 }, { x: 5, z: 1 },  // Player 1 spawns
-    { x: 6, z: 6 }, { x: 4, z: 7 }, { x: 2, z: 6 },  // Player 2 spawns
-  ];
-  const reservedPositions = new Set(spawnPositions.map(p => `${p.x},${p.z}`));
+  // ============================================
+  // TERRAIN GENERATION - Constructive Algorithm
+  // ============================================
+  // Instead of generate-and-validate, we:
+  // 1. Build a guaranteed main corridor along an edge (not middle)
+  // 2. Connect each spawn point to the corridor via cardinal paths
+  // 3. Mark all path tiles as "protected"
+  // 4. Place terrain only in unprotected tiles (middle of map)
+  // This always succeeds and is deterministic with a seed.
 
-  // Check if all spawn positions have at least one adjacent walkable tile
-  function allSpawnsHaveExit(blocked: Set<string>): boolean {
-    for (const spawn of spawnPositions) {
-      const adjacent = [
-        { x: spawn.x - 1, z: spawn.z },
-        { x: spawn.x + 1, z: spawn.z },
-        { x: spawn.x, z: spawn.z - 1 },
-        { x: spawn.x, z: spawn.z + 1 },
-      ];
-      const hasExit = adjacent.some(({ x, z }) =>
-        x >= 0 && x < GRID_SIZE && z >= 0 && z < GRID_SIZE && !blocked.has(`${x},${z}`)
-      );
-      if (!hasExit) return false;
-    }
-    return true;
-  }
+  // Combine spawn positions for terrain generation (using config constants)
+  const spawnPositions = [...PLAYER1_SPAWN_POSITIONS, ...PLAYER2_SPAWN_POSITIONS];
 
-  // Check if a path exists from bottom row (z=0) to top row (z=7) avoiding terrain
-  function hasPathBetweenRows(blocked: Set<string>): boolean {
-    const visited = new Set<string>();
-    const queue: [number, number][] = [];
+  /**
+   * Generate an edge-hugging corridor from bottom to top.
+   * Routes along left or right edge with some variance, leaving middle open.
+   */
+  function generateEdgeCorridor(): { x: number; z: number }[] {
+    const path: { x: number; z: number }[] = [];
 
-    // Start from all non-blocked tiles on z=0
-    for (let x = 0; x < GRID_SIZE; x++) {
-      const key = `${x},0`;
-      if (!blocked.has(key)) {
-        queue.push([x, 0]);
-        visited.add(key);
+    // Pick which edge to favor (left or right)
+    const favorLeft = Math.random() < 0.5;
+
+    // Start position: on or near the chosen edge
+    let x = favorLeft
+      ? Math.floor(Math.random() * 2)  // 0 or 1
+      : GRID_SIZE - 1 - Math.floor(Math.random() * 2);  // 6 or 7
+
+    // Walk from z=0 to z=GRID_SIZE-1
+    for (let z = 0; z < GRID_SIZE; z++) {
+      path.push({ x, z });
+
+      // Occasionally drift laterally (but stay near edge)
+      if (z < GRID_SIZE - 1 && Math.random() < 0.3) {
+        // Drift toward or away from edge
+        const driftTowardEdge = Math.random() < 0.6;  // Bias toward edge
+        if (driftTowardEdge) {
+          // Move toward edge
+          if (favorLeft && x > 0) x--;
+          else if (!favorLeft && x < GRID_SIZE - 1) x++;
+        } else {
+          // Move away from edge (but not too far - stay in outer third)
+          const maxDrift = Math.floor(GRID_SIZE / 3);
+          if (favorLeft && x < maxDrift) x++;
+          else if (!favorLeft && x > GRID_SIZE - 1 - maxDrift) x--;
+        }
       }
     }
+
+    return path;
+  }
+
+  /**
+   * Find shortest cardinal path from start to any tile in the target set using BFS.
+   * Only uses cardinal directions (no diagonals) since units can't move diagonally.
+   */
+  function findCardinalPathToSet(
+    startX: number,
+    startZ: number,
+    targetSet: Set<string>
+  ): { x: number; z: number }[] {
+    const startKey = `${startX},${startZ}`;
+
+    // BFS to find shortest cardinal path to any target tile
+    const visited = new Set<string>();
+    const parent = new Map<string, string | null>();
+    const queue: [number, number][] = [[startX, startZ]];
+    visited.add(startKey);
+    parent.set(startKey, null);
 
     while (queue.length > 0) {
       const [cx, cz] = queue.shift()!;
-
-      // Reached top row
-      if (cz === GRID_SIZE - 1) return true;
-
-      // Check cardinal directions
-      const directions = [[0, 1], [0, -1], [1, 0], [-1, 0]];
-      for (const [dx, dz] of directions) {
-        const nx = cx + dx;
-        const nz = cz + dz;
-        const key = `${nx},${nz}`;
-
-        if (nx < 0 || nx >= GRID_SIZE || nz < 0 || nz >= GRID_SIZE) continue;
-        if (visited.has(key) || blocked.has(key)) continue;
-
-        visited.add(key);
-        queue.push([nx, nz]);
-      }
-    }
-
-    return false;
-  }
-
-  // Count distinct paths by checking if path exists after blocking each tile on a found path
-  function hasMultiplePaths(blocked: Set<string>): boolean {
-    // Find one path first
-    const visited = new Set<string>();
-    const parent = new Map<string, string | null>();
-    const queue: [number, number][] = [];
-
-    for (let x = 0; x < GRID_SIZE; x++) {
-      const key = `${x},0`;
-      if (!blocked.has(key)) {
-        queue.push([x, 0]);
-        visited.add(key);
-        parent.set(key, null);
-      }
-    }
-
-    let endKey: string | null = null;
-    while (queue.length > 0 && !endKey) {
-      const [cx, cz] = queue.shift()!;
       const currentKey = `${cx},${cz}`;
 
-      if (cz === GRID_SIZE - 1) {
-        endKey = currentKey;
-        break;
+      // Check if we reached a target tile (but not the start itself)
+      if (targetSet.has(currentKey) && currentKey !== startKey) {
+        // Reconstruct path from start to this target
+        const path: { x: number; z: number }[] = [];
+        let key: string | null = currentKey;
+        while (key) {
+          const [px, pz] = key.split(",").map(Number);
+          path.unshift({ x: px, z: pz });
+          key = parent.get(key) || null;
+        }
+        return path;
       }
 
-      const directions = [[0, 1], [0, -1], [1, 0], [-1, 0]];
-      for (const [dx, dz] of directions) {
+      // Explore cardinal neighbors only (no diagonals!)
+      const cardinalDirs = [[0, 1], [0, -1], [1, 0], [-1, 0]];
+      for (const [dx, dz] of cardinalDirs) {
         const nx = cx + dx;
         const nz = cz + dz;
         const key = `${nx},${nz}`;
 
+        // Stay in bounds
         if (nx < 0 || nx >= GRID_SIZE || nz < 0 || nz >= GRID_SIZE) continue;
-        if (visited.has(key) || blocked.has(key)) continue;
+        // Don't revisit
+        if (visited.has(key)) continue;
 
         visited.add(key);
         parent.set(key, currentKey);
@@ -356,62 +359,93 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
       }
     }
 
-    if (!endKey) return false; // No path at all
-
-    // Reconstruct path
-    const pathTiles: string[] = [];
-    let current: string | null = endKey;
-    while (current) {
-      pathTiles.push(current);
-      current = parent.get(current) || null;
-    }
-
-    // Check if blocking any tile on the path still leaves an alternative
-    for (const tile of pathTiles) {
-      const testBlocked = new Set(blocked);
-      testBlocked.add(tile);
-      if (hasPathBetweenRows(testBlocked)) {
-        return true; // Found alternative path
-      }
-    }
-
-    return false; // Blocking any tile on the path breaks connectivity
+    // No path found (shouldn't happen on open grid) - return just start
+    console.warn(`No cardinal path found from (${startX},${startZ}) to corridor`);
+    return [{ x: startX, z: startZ }];
   }
 
-  // Generate 10 random terrain positions ensuring at least 2 paths exist
+  /**
+   * Constructive terrain generation algorithm.
+   * Guarantees valid terrain on first try - no retries needed.
+   */
   function generateTerrainPositions(): { x: number; z: number }[] {
-    const maxAttempts = 100;
+    const protectedTiles = new Set<string>();
 
-    for (let attempt = 0; attempt < maxAttempts; attempt++) {
-      const positions: { x: number; z: number }[] = [];
-      const used = new Set(reservedPositions);
-      const testTerrain = new Set<string>();
+    // Step 1: Create main corridor along an edge (leaves middle open for terrain)
+    const mainCorridor = generateEdgeCorridor();
 
-      while (positions.length < 10) {
-        const x = Math.floor(Math.random() * GRID_SIZE);
-        const z = Math.floor(Math.random() * GRID_SIZE);
-        const key = `${x},${z}`;
+    // Add main corridor to protected set
+    for (const tile of mainCorridor) {
+      protectedTiles.add(`${tile.x},${tile.z}`);
+    }
 
-        if (!used.has(key)) {
-          used.add(key);
-          positions.push({ x, z });
-          testTerrain.add(key);
-        }
+    // Step 2: Connect each spawn to the corridor via cardinal path
+    // IMPORTANT: Don't add spawns to protected BEFORE finding paths,
+    // otherwise findCardinalPathToSet returns immediately
+    for (const spawn of spawnPositions) {
+      // Find cardinal path from spawn to nearest protected tile
+      const pathToCorridor = findCardinalPathToSet(
+        spawn.x, spawn.z,
+        protectedTiles
+      );
+
+      // Add entire path (including spawn) to protected tiles
+      for (const tile of pathToCorridor) {
+        protectedTiles.add(`${tile.x},${tile.z}`);
       }
 
-      // Validate: must have at least 2 distinct paths AND no blocked-in spawns
-      if (hasMultiplePaths(testTerrain) && allSpawnsHaveExit(testTerrain)) {
-        // Valid configuration - add to actual terrain set
-        for (const key of testTerrain) {
-          terrainTiles.add(key);
-        }
-        return positions;
+      // Also protect the spawn itself (in case path didn't include it)
+      protectedTiles.add(`${spawn.x},${spawn.z}`);
+    }
+
+    // Step 3: Verify each spawn has at least one cardinal exit
+    // (Should always be true now, but safety check)
+    for (const spawn of spawnPositions) {
+      const cardinalNeighbors = [
+        { x: spawn.x - 1, z: spawn.z },
+        { x: spawn.x + 1, z: spawn.z },
+        { x: spawn.x, z: spawn.z - 1 },
+        { x: spawn.x, z: spawn.z + 1 },
+      ].filter(n => n.x >= 0 && n.x < GRID_SIZE && n.z >= 0 && n.z < GRID_SIZE);
+
+      const hasCardinalExit = cardinalNeighbors.some(n =>
+        protectedTiles.has(`${n.x},${n.z}`)
+      );
+
+      if (!hasCardinalExit && cardinalNeighbors.length > 0) {
+        // Protect a random cardinal neighbor
+        const randomNeighbor = cardinalNeighbors[
+          Math.floor(Math.random() * cardinalNeighbors.length)
+        ];
+        protectedTiles.add(`${randomNeighbor.x},${randomNeighbor.z}`);
       }
     }
 
-    // Fallback: return empty (no terrain) if can't find valid config
-    console.warn("Could not generate valid terrain with 2 paths, using no terrain");
-    return [];
+    // Step 4: Collect eligible tiles for terrain (not protected)
+    const eligibleTiles: { x: number; z: number }[] = [];
+    for (let x = 0; x < GRID_SIZE; x++) {
+      for (let z = 0; z < GRID_SIZE; z++) {
+        if (!protectedTiles.has(`${x},${z}`)) {
+          eligibleTiles.push({ x, z });
+        }
+      }
+    }
+
+    // Step 5: Shuffle and select terrain tiles
+    for (let i = eligibleTiles.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [eligibleTiles[i], eligibleTiles[j]] = [eligibleTiles[j], eligibleTiles[i]];
+    }
+
+    const terrainCount = Math.min(TERRAIN_COUNT, eligibleTiles.length);
+    const positions = eligibleTiles.slice(0, terrainCount);
+
+    // Add to terrain tiles set for collision detection
+    for (const pos of positions) {
+      terrainTiles.add(`${pos.x},${pos.z}`);
+    }
+
+    return positions;
   }
 
   const terrainPositions = generateTerrainPositions();
