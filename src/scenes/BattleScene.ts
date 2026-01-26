@@ -95,6 +95,12 @@ import { MUSIC, SFX, AUDIO_VOLUMES, LOOP_BUFFER_TIME } from "../config";
 // Import utility functions
 import { hexToColor3, createMusicPlayer, playSfx, rgbToColor3 } from "../utils";
 
+// Pure game logic is available in /src/battle/ for headless simulations.
+// This file (BattleScene.ts) handles visual rendering and uses inline logic
+// that mirrors the pure versions. Future refactor: delegate to battle module.
+// See: /src/battle/state.ts (UnitState, BattleState)
+//      /src/battle/rules.ts (movement, LOS, combat, turns)
+
 export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, loadout: Loadout | null): Scene {
   const scene = new Scene(engine);
   // Use centralized scene background color
@@ -423,6 +429,69 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
   function hasTerrain(x: number, z: number): boolean {
     return terrainTiles.has(`${x},${z}`);
   }
+
+  // ============================================
+  // STATE EXTRACTION (for simulations/AI)
+  // ============================================
+  // These functions extract pure game state for use with /src/battle/ rules.
+  // This enables headless simulations without Babylon.js dependencies.
+
+  /**
+   * Extract pure UnitState from a visual Unit.
+   * Used for simulations, AI, and state synchronization.
+   */
+  function extractUnitState(unit: Unit, index: number): import("../battle").UnitState {
+    return {
+      id: `${unit.team}-${index}`,
+      unitClass: unit.unitClass,
+      team: unit.team,
+      gridX: unit.gridX,
+      gridZ: unit.gridZ,
+      hp: unit.hp,
+      maxHp: unit.maxHp,
+      attack: unit.attack,
+      healAmount: unit.healAmount,
+      moveRange: unit.moveRange,
+      attackRange: unit.attackRange,
+      combatStyle: unit.customization?.combatStyle ?? "ranged",
+      speed: unit.speed,
+      speedBonus: unit.speedBonus,
+      accumulator: unit.accumulator,
+      loadoutIndex: unit.loadoutIndex,
+      isConcealed: unit.isConcealed,
+      isCovering: unit.isCovering,
+      coveredTiles: [], // TODO: track covered tiles in Unit
+      actionsUsed: turnState?.unit === unit ? (ACTIONS_PER_TURN - turnState.actionsRemaining) : 0,
+    };
+  }
+
+  /**
+   * Extract complete BattleState from current game.
+   * Used for simulations, AI decision making, and state sync.
+   */
+  function extractBattleState(): import("../battle").BattleState {
+    const currentUnit = turnState?.unit;
+    return {
+      gridSize: GRID_SIZE,
+      terrain: new Set(terrainTiles),
+      units: units.map((u, i) => extractUnitState(u, i)),
+      currentUnitId: currentUnit ? `${currentUnit.team}-${units.indexOf(currentUnit)}` : null,
+      actionsRemaining: turnState?.actionsRemaining ?? 0,
+      pendingActions: turnState?.pendingActions.map(a => ({
+        type: a.type,
+        targetX: a.targetX,
+        targetZ: a.targetZ,
+        targetUnitId: a.targetUnit ? `${a.targetUnit.team}-${units.indexOf(a.targetUnit)}` : undefined,
+        abilityName: a.abilityName,
+      })) ?? [],
+      originalPosition: turnState?.originalPosition ?? null,
+      isGameOver: false, // TODO: track game over state
+      winner: null,
+    };
+  }
+
+  // Export state extraction for external use (AI, simulations)
+  void extractBattleState; // Prevent unused warning
 
   // GUI
   const gui = AdvancedDynamicTexture.CreateFullscreenUI("UI");
