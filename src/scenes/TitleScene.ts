@@ -181,35 +181,35 @@ export function createTitleScene(
   const fadeInDuration = TITLE_FADE_IN_DURATION;
   const fadeInDelay = TITLE_FADE_IN_DELAY;
 
-  // Main title - Bebas Neue for that industrial T2 feel
+  // Subtitle line - smaller, above main title
   const titleLine1 = new TextBlock();
   titleLine1.text = "T H E   S U N S E T   G A M B I T";
   titleLine1.color = "rgba(232, 196, 160, 0)"; // Start invisible
   titleLine1.fontFamily = "'Bebas Neue', 'Arial Black', sans-serif";
   titleLine1.fontWeight = "400";
-  titleLine1.fontSize = 36;
-  titleLine1.height = "55px";
+  titleLine1.fontSize = 24;
+  titleLine1.height = "35px";
   titleLine1.shadowColor = "rgba(255, 100, 20, 0)";
-  titleLine1.shadowBlur = 20;
-  titleLine1.shadowOffsetY = 2;
+  titleLine1.shadowBlur = 15;
+  titleLine1.shadowOffsetY = 1;
   panel.addControl(titleLine1);
 
-  // Subtitle - larger, more dramatic
+  // Main title - BIG, fills width on mobile
   const titleLine2 = new TextBlock();
   titleLine2.text = "C R U C I B L E";
   titleLine2.color = "rgba(255, 179, 102, 0)"; // Start invisible
   titleLine2.fontFamily = "'Bebas Neue', 'Arial Black', sans-serif";
   titleLine2.fontWeight = "400";
-  titleLine2.fontSize = 96;
-  titleLine2.height = "120px";
+  titleLine2.fontSize = 64;
+  titleLine2.height = "75px";
   titleLine2.shadowColor = "rgba(255, 80, 0, 0)";
-  titleLine2.shadowBlur = 30;
-  titleLine2.shadowOffsetY = 4;
+  titleLine2.shadowBlur = 25;
+  titleLine2.shadowOffsetY = 3;
   panel.addControl(titleLine2);
 
   // Thin decorative line
   const divider = new Rectangle();
-  divider.width = "300px";
+  divider.width = "70%";
   divider.height = "2px";
   divider.thickness = 0;
   divider.background = "rgba(255, 150, 80, 0)"; // Start invisible
@@ -217,15 +217,15 @@ export function createTitleScene(
 
   // Spacer
   const spacer = new TextBlock();
-  spacer.height = "60px";
+  spacer.height = "40px";
   spacer.text = "";
   panel.addControl(spacer);
 
   // Start fade-in after fonts load (including button font size)
   Promise.all([
-    document.fonts.load("36px 'Bebas Neue'"),
-    document.fonts.load("96px 'Bebas Neue'"),
-    document.fonts.load("20px 'Bebas Neue'"),
+    document.fonts.load("24px 'Bebas Neue'"),
+    document.fonts.load("64px 'Bebas Neue'"),
+    document.fonts.load("18px 'Bebas Neue'"),
   ]).then(() => {
     // Force buttons to recalculate layout now that fonts are loaded
     for (const btn of modeButtons) {
@@ -243,12 +243,12 @@ export function createTitleScene(
   // Helper to create a styled button
   function createModeButton(text: string, mode: GameMode): Button {
     const button = Button.CreateSimpleButton(`mode_${mode}`, text);
-    button.width = "200px";
-    button.height = "45px";
+    button.width = "70%";
+    button.height = "50px";
     button.background = "rgba(40, 20, 15, 0.6)";
-    button.cornerRadius = 2;
+    button.cornerRadius = 4;
     button.thickness = 1;
-    button.color = "#b89070";
+    button.color = TITLE_TEXT_COLORS.buttonText;
     button.hoverCursor = "pointer";
     button.alpha = 0; // Start invisible, fade in with title
 
@@ -256,7 +256,8 @@ export function createTitleScene(
     if (button.textBlock) {
       button.textBlock.color = TITLE_TEXT_COLORS.buttonText;
       button.textBlock.fontFamily = "'Bebas Neue', 'Arial Black', sans-serif";
-      button.textBlock.fontSize = 20;
+      button.textBlock.fontSize = 18;
+      button.textBlock.textHorizontalAlignment = Control.HORIZONTAL_ALIGNMENT_CENTER;
     }
 
     // Hover effects
