@@ -5,6 +5,12 @@ import {
   Vector3,
   ArcRotateCamera,
   HemisphericLight,
+  SceneLoader,
+  AbstractMesh,
+  Color3,
+  StandardMaterial,
+  AnimationGroup,
+  PointerEventTypes,
 } from "@babylonjs/core";
 import "@babylonjs/loaders/glTF";
 import {
@@ -34,30 +40,62 @@ import {
 import { MUSIC, AUDIO_VOLUMES, LOOP_BUFFER_TIME, DEBUG_SKIP_OFFSET } from "../config";
 import { createMusicPlayer } from "../utils";
 
-// Class descriptions for tooltips
-const CLASS_DESCRIPTIONS: Record<UnitClass, { fluff: string; ability: string }> = {
-  soldier: {
-    fluff: "Soldiers are the backbone of settlement defense. Where others see danger, they see a perimeter to hold.",
-    ability: "[COVER] Enemies that finish actions in covered squares trigger a counter attack. Cover ends at next turn start, after countering, or if hit.",
-  },
-  operator: {
-    fluff: "Operators work beyond the walls where survival demands cunning over strength. The unseen blade that keeps the settlement safe.",
-    ability: "[CONCEAL] Next incoming hit is negated and won't trigger enemy Cover. Survive fatal encounters or slip past defenses.",
-  },
-  medic: {
-    fluff: "In a settlement where every life is precious, Medics are revered. Trained in trauma care and combat medicine.",
-    ability: "[HEAL] Restore HP to self or adjacent ally. The difference between victory and defeat is keeping the right person standing.",
-  },
-};
+// ============================================
+// COLOR PALETTE (matches title screen aesthetic)
+// ============================================
+const COLORS = {
+  // Backgrounds
+  bgDeep: "#0a0a12",
+  bgPanel: "#14110f",
+  bgUnitRow: "#1a1714",
+  bgButton: "#2a2420",
+  bgButtonHover: "#3a3025",
 
-// Combat style descriptions for tooltips
-const COMBAT_STYLE_DESCRIPTIONS = {
-  melee: "[MELEE] 2x damage. Attacks all 8 adjacent spaces with line of sight. Best for holding chokepoints.",
-  ranged: "[RANGED] Attacks anywhere in line of sight except 8 adjacent spaces. Control the battlefield from distance.",
+  // Borders & dividers
+  borderWarm: "#3a2a1a",
+  borderLight: "#5a4a35",
+
+  // Text
+  textPrimary: "#e8c8a0",
+  textSecondary: "#a08060",
+  textMuted: "#706050",
+
+  // Accents
+  accentOrange: "#ff9650",
+  accentOrangeDeep: "#c06020",
+  accentBlue: "#4080cc",
+  accentBlueDeep: "#305080",
+
+  // Interactive states
+  selected: "#c06020",
+  selectedGlow: "rgba(255, 150, 80, 0.3)",
+  disabled: "#404040",
+  success: "#508040",
+  successHover: "#609050",
 };
 
 // Greek letters for unit designations
 const UNIT_DESIGNATIONS = ["Δ", "Ψ", "Ω"]; // Delta, Psi, Omega
+
+// Class info
+const CLASS_INFO: Record<UnitClass, { name: string; desc: string }> = {
+  soldier: { name: "Soldier", desc: "Frontline fighter. [COVER] creates zones that trigger counter attacks when enemies end their turn there." },
+  operator: { name: "Operator", desc: "Stealth specialist. [CONCEAL] negates the next incoming hit and won't trigger enemy Cover." },
+  medic: { name: "Medic", desc: "Support unit. [HEAL] restores HP to self or adjacent allies (diagonals require line of sight)." },
+};
+
+// Boost info
+const BOOST_INFO = [
+  { label: "+25% HP", desc: "Increases maximum health by 25%." },
+  { label: "+25% Power", desc: "Increases attack damage by 25%." },
+  { label: "+25% Speed", desc: "Increases initiative speed by 25%." },
+];
+
+// Weapon info
+const WEAPON_INFO = {
+  ranged: { label: "Ranged", desc: "[RANGED] Attacks anywhere in line of sight, except adjacent tiles." },
+  melee: { label: "Melee", desc: "[MELEE] 2x damage. Attacks adjacent spaces only." },
+};
 
 export function createLoadoutScene(
   engine: Engine,
@@ -69,6 +107,25 @@ export function createLoadoutScene(
   // Use centralized scene background color
   const bg = SCENE_BACKGROUNDS.loadout;
   scene.clearColor = new Color4(bg.r, bg.g, bg.b, bg.a);
+
+  // ============================================
+  // RESPONSIVE SIZING
+  // ============================================
+  const screenWidth = engine.getRenderWidth();
+  const isMobile = screenWidth < 600;
+  const isTablet = screenWidth >= 600 && screenWidth < 1024;
+
+  // Touch-friendly button heights (44px minimum for mobile)
+  const buttonHeight = isMobile ? 44 : isTablet ? 46 : 48;
+  const smallButtonHeight = isMobile ? 40 : isTablet ? 42 : 44;
+  const fontSize = isMobile ? 13 : isTablet ? 14 : 15;
+  const smallFontSize = isMobile ? 11 : isTablet ? 12 : 13;
+  const tinyFontSize = isMobile ? 10 : isTablet ? 11 : 12;
+  const headerFontSize = isMobile ? 20 : isTablet ? 24 : 26;
+  // Unit row: 3 rows of buttons + padding
+  const unitRowHeight = isMobile ? 160 : isTablet ? 180 : 200;
+  const panelWidth = isMobile ? "98%" : isTablet ? "94%" : "85%";
+  const isDesktop = screenWidth >= 1024;
 
   // Loadout music
   const music = createMusicPlayer(MUSIC.loadout, AUDIO_VOLUMES.music, true, LOOP_BUFFER_TIME);
@@ -92,8 +149,12 @@ export function createLoadoutScene(
     music.src = "";
   });
 
-  // Simple camera setup
-  const camera = new ArcRotateCamera("cam", Math.PI/2, Math.PI/2.2, 6, new Vector3(0, 0.8, 0), scene);
+  // Camera setup for 3D preview
+  const camera = new ArcRotateCamera("cam", Math.PI / 2, Math.PI / 2.5, isDesktop ? 8 : 4, new Vector3(0, 0.8, 0), scene);
+  // Don't attach camera controls - they interfere with UI scrolling
+  // camera.attachControl(_canvas, true);
+  camera.lowerRadiusLimit = 2;
+  camera.upperRadiusLimit = 12;
   scene.activeCamera = camera;
 
   const light = new HemisphericLight("light", new Vector3(0, 1, 0.5), scene);
@@ -116,78 +177,76 @@ export function createLoadoutScene(
   // Track team color refresh callbacks
   const teamColorRefreshCallbacks: { player1?: () => void; player2?: () => void } = {};
 
-  // Tooltip system
-  const tooltip = new Rectangle("tooltip");
-  tooltip.width = "280px";
-  tooltip.adaptHeightToChildren = true;
-  tooltip.background = "#1a1a2eee";
-  tooltip.cornerRadius = 8;
-  tooltip.thickness = 1;
-  tooltip.color = "#666688";
-  tooltip.paddingTop = "8px";
-  tooltip.paddingBottom = "8px";
-  tooltip.paddingLeft = "10px";
-  tooltip.paddingRight = "10px";
-  tooltip.isVisible = false;
-  tooltip.zIndex = 1000;
-  tooltip.verticalAlignment = Control.VERTICAL_ALIGNMENT_TOP;
-  tooltip.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_LEFT;
-  gui.addControl(tooltip);
-
-  const tooltipText = new TextBlock("tooltipText");
-  tooltipText.text = "";
-  tooltipText.color = "#cccccc";
-  tooltipText.fontSize = 12;
-  tooltipText.textWrapping = true;
-  tooltipText.textHorizontalAlignment = Control.HORIZONTAL_ALIGNMENT_LEFT;
-  tooltipText.resizeToFit = true;
-  tooltipText.paddingBottom = "4px";
-  tooltip.addControl(tooltipText);
-
-  function showTooltip(text: string, x: number, y: number): void {
-    tooltipText.text = text;
-    tooltip.left = `${x + 10}px`;
-    tooltip.top = `${y + 10}px`;
-    tooltip.isVisible = true;
-  }
-
-  function hideTooltip(): void {
-    tooltip.isVisible = false;
-  }
-
-  // Main vertical container with scroll
+  // ============================================
+  // MAIN LAYOUT - Custom drag-to-scroll
+  // ============================================
   const scrollViewer = new ScrollViewer("mainScroll");
   scrollViewer.width = "100%";
   scrollViewer.height = "100%";
   scrollViewer.thickness = 0;
-  scrollViewer.barSize = 8;
-  scrollViewer.barColor = "#666688";
+  scrollViewer.barSize = 0; // Hide scrollbar
+  scrollViewer.barColor = "transparent";
+  scrollViewer.wheelPrecision = 0.05;
   gui.addControl(scrollViewer);
+
+  // Custom drag-to-scroll implementation using scene-level events
+  let isDragging = false;
+  let lastPointerY = 0;
+
+  scene.onPointerObservable.add((pointerInfo) => {
+    const evt = pointerInfo.event;
+
+    if (pointerInfo.type === PointerEventTypes.POINTERDOWN) {
+      isDragging = true;
+      lastPointerY = evt.clientY;
+    }
+
+    if (pointerInfo.type === PointerEventTypes.POINTERUP) {
+      isDragging = false;
+    }
+
+    if (pointerInfo.type === PointerEventTypes.POINTERMOVE && isDragging) {
+      const deltaY = lastPointerY - evt.clientY;
+      lastPointerY = evt.clientY;
+
+      const contentHeight = mainStack.heightInPixels;
+      const viewportHeight = scrollViewer.heightInPixels;
+      const maxScroll = contentHeight - viewportHeight;
+
+      if (maxScroll > 0) {
+        const scrollDelta = deltaY / maxScroll;
+        const newScroll = Math.max(0, Math.min(1, scrollViewer.verticalBar.value + scrollDelta));
+        scrollViewer.verticalBar.value = newScroll;
+      }
+    }
+  });
 
   const mainStack = new StackPanel("mainStack");
   mainStack.width = "100%";
   mainStack.isVertical = true;
-  mainStack.paddingTop = "10px";
-  mainStack.paddingBottom = "80px"; // Space for start button
+  mainStack.paddingTop = "15px";
+  mainStack.paddingBottom = "90px"; // Space for start button
   scrollViewer.addControl(mainStack);
 
-  // Start button (fixed at bottom) - create BEFORE player panels since they call updateStartButton
+  // ============================================
+  // START BUTTON (fixed at bottom)
+  // ============================================
   const startBtnContainer = new Rectangle("startBtnContainer");
   startBtnContainer.width = "100%";
-  startBtnContainer.height = "70px";
+  startBtnContainer.height = "80px";
   startBtnContainer.verticalAlignment = Control.VERTICAL_ALIGNMENT_BOTTOM;
-  startBtnContainer.background = "#1a1a2eee";
+  startBtnContainer.background = COLORS.bgDeep + "ee";
   startBtnContainer.thickness = 0;
   gui.addControl(startBtnContainer);
 
-  const startBtn = Button.CreateSimpleButton("startBattle", "START BATTLE");
-  startBtn.width = "200px";
-  startBtn.height = "50px";
-  startBtn.color = "white";
-  startBtn.background = "#444444";
-  startBtn.cornerRadius = 8;
-  startBtn.fontSize = 18;
-  startBtn.fontWeight = "bold";
+  const startBtn = Button.CreateSimpleButton("startBattle", "S T A R T   B A T T L E");
+  startBtn.width = isMobile ? "80%" : isTablet ? "50%" : "300px";
+  startBtn.height = `${buttonHeight + 10}px`;
+  startBtn.color = COLORS.textPrimary;
+  startBtn.background = COLORS.disabled;
+  startBtn.cornerRadius = 6;
+  startBtn.fontSize = fontSize + 2;
+  startBtn.fontFamily = "'Bebas Neue', sans-serif";
   startBtn.isEnabled = false;
   startBtn.alpha = 0.5;
   startBtn.onPointerClickObservable.add(() => {
@@ -205,7 +264,17 @@ export function createLoadoutScene(
     const ready = isReadyToStart();
     startBtn.isEnabled = ready;
     startBtn.alpha = ready ? 1 : 0.5;
-    startBtn.background = ready ? "#448844" : "#444444";
+    startBtn.background = ready ? COLORS.success : COLORS.disabled;
+    if (ready) {
+      startBtn.onPointerEnterObservable.clear();
+      startBtn.onPointerOutObservable.clear();
+      startBtn.onPointerEnterObservable.add(() => {
+        startBtn.background = COLORS.successHover;
+      });
+      startBtn.onPointerOutObservable.add(() => {
+        startBtn.background = COLORS.success;
+      });
+    }
   }
 
   // Player names for PvE
@@ -217,14 +286,17 @@ export function createLoadoutScene(
 
   // Separator
   const separator = new Rectangle("separator");
-  separator.width = "90%";
+  separator.width = panelWidth;
   separator.height = "2px";
-  separator.background = "#333355";
+  separator.background = COLORS.borderWarm;
   separator.thickness = 0;
   mainStack.addControl(separator);
 
   createPlayerPanel(player2Name, "player2", selections.player2, mainStack);
 
+  // ============================================
+  // PLAYER PANEL
+  // ============================================
   function createPlayerPanel(
     playerName: string,
     playerId: "player1" | "player2",
@@ -235,11 +307,13 @@ export function createLoadoutScene(
       ? TEAM_COLORS[DEFAULT_PLAYER1_COLOR_INDEX].hex
       : TEAM_COLORS[DEFAULT_PLAYER2_COLOR_INDEX].hex;
 
+    const panelHeight = unitRowHeight * UNITS_PER_TEAM + 80;
+
     const panel = new Rectangle(`${playerId}Panel`);
-    panel.width = "95%";
-    panel.height = "420px";
-    panel.background = "#1a1a2e";
-    panel.cornerRadius = 10;
+    panel.width = panelWidth;
+    panel.height = `${panelHeight}px`;
+    panel.background = COLORS.bgPanel;
+    panel.cornerRadius = 8;
     panel.thickness = 2;
     panel.color = defaultColor;
     panel.paddingTop = "10px";
@@ -254,17 +328,17 @@ export function createLoadoutScene(
     // Header row: Player name + Team color
     const headerRow = new Grid(`${playerId}Header`);
     headerRow.width = "95%";
-    headerRow.height = "40px";
+    headerRow.height = `${buttonHeight + 10}px`;
     headerRow.addColumnDefinition(0.4);
     headerRow.addColumnDefinition(0.6);
     headerRow.addRowDefinition(1);
     panelStack.addControl(headerRow);
 
     const nameText = new TextBlock(`${playerId}Name`);
-    nameText.text = playerName;
+    nameText.text = playerName.toUpperCase();
     nameText.color = defaultColor;
-    nameText.fontSize = 20;
-    nameText.fontWeight = "bold";
+    nameText.fontSize = headerFontSize;
+    nameText.fontFamily = "'Bebas Neue', sans-serif";
     nameText.textHorizontalAlignment = Control.HORIZONTAL_ALIGNMENT_LEFT;
     nameText.paddingLeft = "10px";
     headerRow.addControl(nameText, 0, 0);
@@ -277,10 +351,10 @@ export function createLoadoutScene(
     headerRow.addControl(colorRow, 0, 1);
 
     const colorLabel = new TextBlock();
-    colorLabel.text = "Team:";
-    colorLabel.color = "#888888";
-    colorLabel.fontSize = 12;
-    colorLabel.width = "40px";
+    colorLabel.text = "TEAM";
+    colorLabel.color = COLORS.textMuted;
+    colorLabel.fontSize = smallFontSize;
+    colorLabel.width = "45px";
     colorRow.addControl(colorLabel);
 
     const colorSwatches: Rectangle[] = [];
@@ -302,9 +376,10 @@ export function createLoadoutScene(
     };
 
     TEAM_COLORS.forEach((teamColor) => {
+      const swatchSize = isMobile ? 28 : 24;
       const swatch = new Rectangle();
-      swatch.width = "22px";
-      swatch.height = "22px";
+      swatch.width = `${swatchSize}px`;
+      swatch.height = `${swatchSize}px`;
       swatch.background = teamColor.hex;
       swatch.cornerRadius = 4;
       swatch.paddingLeft = "2px";
@@ -313,7 +388,7 @@ export function createLoadoutScene(
       const isSelected = getThisColor() === teamColor.hex;
       const isDisabled = getOtherColor() === teamColor.hex;
       swatch.thickness = isSelected ? 3 : 1;
-      swatch.color = isSelected ? "white" : "#333333";
+      swatch.color = isSelected ? "white" : COLORS.borderWarm;
       swatch.alpha = isDisabled ? 0.3 : 1;
 
       swatch.onPointerClickObservable.add(() => {
@@ -337,7 +412,7 @@ export function createLoadoutScene(
         const isSelected = getThisColor() === teamColor.hex;
         const isDisabled = getOtherColor() === teamColor.hex;
         swatch.thickness = isSelected ? 3 : 1;
-        swatch.color = isSelected ? "white" : "#333333";
+        swatch.color = isSelected ? "white" : COLORS.borderWarm;
         swatch.alpha = isDisabled ? 0.3 : 1;
       });
     };
@@ -348,7 +423,8 @@ export function createLoadoutScene(
     const unitsContainer = new StackPanel(`${playerId}Units`);
     unitsContainer.width = "100%";
     unitsContainer.isVertical = true;
-    unitsContainer.paddingTop = "10px";
+    unitsContainer.paddingTop = "5px";
+    unitsContainer.paddingBottom = "10px";
     panelStack.addControl(unitsContainer);
 
     // Create 3 unit selection rows
@@ -360,12 +436,9 @@ export function createLoadoutScene(
   // ============================================
   // APPEARANCE EDITOR OVERLAY
   // ============================================
-
-  // Store button references for updating selection state - declare BEFORE helper functions
   const appearanceOptionButtons: Map<string, Button[]> = new Map();
   const appearanceColorSwatches: Map<string, Rectangle[]> = new Map();
 
-  // Current unit being edited
   let editingUnit: { playerId: string; unitIndex: number; selectionArray: UnitSelection[] } | null = null;
   let editingCustomization: UnitCustomization = {
     body: "male",
@@ -377,7 +450,10 @@ export function createLoadoutScene(
     skinTone: 4,
   };
 
-  // Helper function to create appearance option buttons
+  // Preview model tracking
+  let previewMesh: AbstractMesh | null = null;
+  let previewAnimations: AnimationGroup[] = [];
+
   function createAppearanceOption(
     label: string,
     options: string[],
@@ -385,41 +461,54 @@ export function createLoadoutScene(
     onChange: (idx: number) => void
   ): StackPanel {
     const container = new StackPanel(`appearance_${label}`);
-    container.width = "95%";
+    container.width = "100%";
     container.isVertical = true;
-    container.paddingTop = "10px";
+    container.paddingTop = "8px";
+    container.paddingBottom = "8px";
 
     const labelText = new TextBlock();
-    labelText.text = label;
-    labelText.color = "#888888";
-    labelText.fontSize = 14;
-    labelText.height = "24px";
+    labelText.text = label.toUpperCase();
+    labelText.color = COLORS.textMuted;
+    labelText.fontSize = smallFontSize;
+    labelText.height = "20px";
     labelText.textHorizontalAlignment = Control.HORIZONTAL_ALIGNMENT_LEFT;
     container.addControl(labelText);
 
     const btnRow = new StackPanel();
     btnRow.isVertical = false;
     btnRow.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_LEFT;
-    btnRow.height = "40px";
+    btnRow.height = `${smallButtonHeight + 4}px`;
     container.addControl(btnRow);
 
     const buttons: Button[] = [];
     options.forEach((opt, i) => {
       const btn = Button.CreateSimpleButton(`${label}_${i}`, opt);
-      btn.width = "70px";
-      btn.height = "36px";
-      btn.color = "white";
-      btn.background = i === defaultIdx ? "#4488ff" : "#333355";
-      btn.cornerRadius = 6;
-      btn.fontSize = 13;
+      btn.width = `${Math.max(60, opt.length * 12 + 20)}px`;
+      btn.height = `${smallButtonHeight}px`;
+      btn.color = COLORS.textPrimary;
+      btn.background = i === defaultIdx ? COLORS.selected : COLORS.bgButton;
+      btn.cornerRadius = 4;
+      btn.fontSize = smallFontSize;
       btn.paddingLeft = "4px";
       btn.paddingRight = "4px";
+      btn.thickness = 1;
+
+      btn.onPointerEnterObservable.add(() => {
+        if (buttons.indexOf(btn) !== buttons.findIndex(b => b.background === COLORS.selected)) {
+          btn.background = COLORS.bgButtonHover;
+        }
+      });
+      btn.onPointerOutObservable.add(() => {
+        const isSelected = btn.background === COLORS.selected;
+        if (!isSelected) btn.background = COLORS.bgButton;
+      });
 
       btn.onPointerClickObservable.add(() => {
         buttons.forEach((b, j) => {
-          b.background = j === i ? "#4488ff" : "#333355";
+          b.background = j === i ? COLORS.selected : COLORS.bgButton;
         });
         onChange(i);
+        updatePreviewModel();
       });
 
       buttons.push(btn);
@@ -437,32 +526,35 @@ export function createLoadoutScene(
     onChange: (idx: number) => void
   ): StackPanel {
     const container = new StackPanel(`appearance_${label}`);
-    container.width = "95%";
+    container.width = "100%";
     container.isVertical = true;
-    container.paddingTop = "10px";
+    container.paddingTop = "8px";
+    container.paddingBottom = "8px";
 
     const labelText = new TextBlock();
-    labelText.text = label;
-    labelText.color = "#888888";
-    labelText.fontSize = 14;
-    labelText.height = "24px";
+    labelText.text = label.toUpperCase();
+    labelText.color = COLORS.textMuted;
+    labelText.fontSize = smallFontSize;
+    labelText.height = "20px";
     labelText.textHorizontalAlignment = Control.HORIZONTAL_ALIGNMENT_LEFT;
     container.addControl(labelText);
 
     const swatchRow = new StackPanel();
     swatchRow.isVertical = false;
     swatchRow.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_LEFT;
-    swatchRow.height = "40px";
+    swatchRow.height = `${smallButtonHeight}px`;
     container.addControl(swatchRow);
 
     const swatches: Rectangle[] = [];
+    const swatchSize = isMobile ? 32 : 28;
+
     colors.forEach((color, i) => {
       const swatch = new Rectangle();
-      swatch.width = "28px";
-      swatch.height = "28px";
+      swatch.width = `${swatchSize}px`;
+      swatch.height = `${swatchSize}px`;
       swatch.background = color;
       swatch.thickness = i === defaultIdx ? 3 : 1;
-      swatch.color = i === defaultIdx ? "white" : "#333333";
+      swatch.color = i === defaultIdx ? COLORS.accentOrange : COLORS.borderWarm;
       swatch.cornerRadius = 4;
       swatch.paddingLeft = "2px";
       swatch.paddingRight = "2px";
@@ -470,9 +562,10 @@ export function createLoadoutScene(
       swatch.onPointerClickObservable.add(() => {
         swatches.forEach((s, j) => {
           s.thickness = j === i ? 3 : 1;
-          s.color = j === i ? "white" : "#333333";
+          s.color = j === i ? COLORS.accentOrange : COLORS.borderWarm;
         });
         onChange(i);
+        updatePreviewModel();
       });
 
       swatches.push(swatch);
@@ -483,86 +576,110 @@ export function createLoadoutScene(
     return container;
   }
 
-  // Now create the overlay UI elements (after helper functions are defined)
+  // Appearance overlay
   const appearanceOverlay = new Rectangle("appearanceOverlay");
   appearanceOverlay.width = "100%";
   appearanceOverlay.height = "100%";
-  appearanceOverlay.background = "#0a0a15ee";
+  appearanceOverlay.background = COLORS.bgDeep + "f8";
   appearanceOverlay.thickness = 0;
   appearanceOverlay.isVisible = false;
   appearanceOverlay.zIndex = 500;
   gui.addControl(appearanceOverlay);
 
-  const overlayContent = new StackPanel("overlayContent");
-  overlayContent.width = "95%";
-  overlayContent.isVertical = true;
-  overlayContent.paddingTop = "20px";
-  appearanceOverlay.addControl(overlayContent);
+  // Layout: options on left/bottom, preview on right/top (responsive)
+  const overlayGrid = new Grid("overlayGrid");
+  overlayGrid.width = "100%";
+  overlayGrid.height = "100%";
 
+  if (isMobile) {
+    overlayGrid.addColumnDefinition(1);
+    overlayGrid.addRowDefinition(0.35); // Preview
+    overlayGrid.addRowDefinition(0.65); // Options
+  } else {
+    overlayGrid.addColumnDefinition(0.5); // Options
+    overlayGrid.addColumnDefinition(0.5); // Preview
+    overlayGrid.addRowDefinition(1);
+  }
+  appearanceOverlay.addControl(overlayGrid);
+
+  // Options panel
+  const optionsPanel = new ScrollViewer("optionsScroll");
+  optionsPanel.width = "100%";
+  optionsPanel.height = "100%";
+  optionsPanel.thickness = 0;
+  optionsPanel.barSize = 6;
+  optionsPanel.barColor = COLORS.borderWarm;
+  if (isMobile) {
+    overlayGrid.addControl(optionsPanel, 1, 0);
+  } else {
+    overlayGrid.addControl(optionsPanel, 0, 0);
+  }
+
+  const optionsStack = new StackPanel("optionsStack");
+  optionsStack.width = "90%";
+  optionsStack.isVertical = true;
+  optionsStack.paddingTop = "15px";
+  optionsStack.paddingBottom = "20px";
+  optionsPanel.addControl(optionsStack);
+
+  // Title
   const overlayTitle = new TextBlock("overlayTitle");
-  overlayTitle.text = "Customize Appearance";
-  overlayTitle.color = "#ffffff";
-  overlayTitle.fontSize = 24;
-  overlayTitle.fontWeight = "bold";
+  overlayTitle.text = "EDIT APPEARANCE";
+  overlayTitle.color = COLORS.textPrimary;
+  overlayTitle.fontSize = headerFontSize;
+  overlayTitle.fontFamily = "'Bebas Neue', sans-serif";
   overlayTitle.height = "40px";
-  overlayContent.addControl(overlayTitle);
+  overlayTitle.textHorizontalAlignment = Control.HORIZONTAL_ALIGNMENT_LEFT;
+  optionsStack.addControl(overlayTitle);
 
-  const optionsGrid = new Grid("optionsGrid");
-  optionsGrid.width = "100%";
-  optionsGrid.height = "400px";
-  optionsGrid.addColumnDefinition(0.5);
-  optionsGrid.addColumnDefinition(0.5);
-  optionsGrid.addRowDefinition(0.25);
-  optionsGrid.addRowDefinition(0.25);
-  optionsGrid.addRowDefinition(0.25);
-  optionsGrid.addRowDefinition(0.25);
-  overlayContent.addControl(optionsGrid);
-
-  // Body selector
+  // Options
   const bodySelector = createAppearanceOption("Body", ["Male", "Female"], 0, (idx) => {
     editingCustomization.body = idx === 0 ? "male" : "female";
   });
-  optionsGrid.addControl(bodySelector, 0, 0);
+  optionsStack.addControl(bodySelector);
 
-  // Head selector
   const headSelector = createAppearanceOption("Head", ["1", "2", "3", "4"], 0, (idx) => {
     editingCustomization.head = idx;
   });
-  optionsGrid.addControl(headSelector, 0, 1);
+  optionsStack.addControl(headSelector);
 
-  // Handedness selector
-  const handSelector = createAppearanceOption("Hand", ["Right", "Left"], 0, (idx) => {
+  const handSelector = createAppearanceOption("Handedness", ["Right", "Left"], 0, (idx) => {
     editingCustomization.handedness = idx === 0 ? "right" : "left";
   });
-  optionsGrid.addControl(handSelector, 1, 0);
+  optionsStack.addControl(handSelector);
 
-  // Skin tone selector
-  const skinSelector = createColorOption("Skin", SKIN_TONES, 4, (idx) => {
+  const skinSelector = createColorOption("Skin Tone", SKIN_TONES, 4, (idx) => {
     editingCustomization.skinTone = idx;
   });
-  optionsGrid.addControl(skinSelector, 1, 1);
+  optionsStack.addControl(skinSelector);
 
-  // Hair color selector
-  const hairSelector = createColorOption("Hair", HAIR_COLORS, 0, (idx) => {
+  const hairSelector = createColorOption("Hair Color", HAIR_COLORS, 0, (idx) => {
     editingCustomization.hairColor = idx;
   });
-  optionsGrid.addControl(hairSelector, 2, 0);
+  optionsStack.addControl(hairSelector);
 
-  // Eye color selector
-  const eyeSelector = createColorOption("Eyes", EYE_COLORS, 2, (idx) => {
+  const eyeSelector = createColorOption("Eye Color", EYE_COLORS, 2, (idx) => {
     editingCustomization.eyeColor = idx;
   });
-  optionsGrid.addControl(eyeSelector, 2, 1);
+  optionsStack.addControl(eyeSelector);
 
-  // Save button
-  const saveBtn = Button.CreateSimpleButton("saveAppearance", "SAVE");
-  saveBtn.width = "200px";
-  saveBtn.height = "50px";
-  saveBtn.color = "white";
-  saveBtn.background = "#448844";
-  saveBtn.cornerRadius = 8;
-  saveBtn.fontSize = 18;
-  saveBtn.fontWeight = "bold";
+  // Button row
+  const buttonRow = new StackPanel("buttonRow");
+  buttonRow.isVertical = false;
+  buttonRow.height = `${buttonHeight + 20}px`;
+  buttonRow.paddingTop = "15px";
+  optionsStack.addControl(buttonRow);
+
+  const saveBtn = Button.CreateSimpleButton("saveAppearance", "S A V E");
+  saveBtn.width = isMobile ? "120px" : "140px";
+  saveBtn.height = `${buttonHeight}px`;
+  saveBtn.color = COLORS.textPrimary;
+  saveBtn.background = COLORS.success;
+  saveBtn.cornerRadius = 4;
+  saveBtn.fontSize = fontSize;
+  saveBtn.fontFamily = "'Bebas Neue', sans-serif";
+  saveBtn.onPointerEnterObservable.add(() => { saveBtn.background = COLORS.successHover; });
+  saveBtn.onPointerOutObservable.add(() => { saveBtn.background = COLORS.success; });
   saveBtn.onPointerClickObservable.add(() => {
     if (editingUnit) {
       const { unitIndex, selectionArray } = editingUnit;
@@ -570,30 +687,96 @@ export function createLoadoutScene(
         selectionArray[unitIndex].customization = { ...editingCustomization };
       }
     }
-    appearanceOverlay.isVisible = false;
-    editingUnit = null;
+    closeAppearanceEditor();
   });
-  overlayContent.addControl(saveBtn);
+  buttonRow.addControl(saveBtn);
 
-  // Cancel button
-  const cancelBtn = Button.CreateSimpleButton("cancelAppearance", "Cancel");
-  cancelBtn.width = "120px";
-  cancelBtn.height = "40px";
-  cancelBtn.color = "#aaaaaa";
-  cancelBtn.background = "#333344";
-  cancelBtn.cornerRadius = 6;
-  cancelBtn.fontSize = 14;
-  cancelBtn.paddingTop = "10px";
+  // Spacer
+  const btnSpacer = new Rectangle();
+  btnSpacer.width = "15px";
+  btnSpacer.height = "1px";
+  btnSpacer.thickness = 0;
+  buttonRow.addControl(btnSpacer);
+
+  const cancelBtn = Button.CreateSimpleButton("cancelAppearance", "C A N C E L");
+  cancelBtn.width = isMobile ? "100px" : "120px";
+  cancelBtn.height = `${buttonHeight}px`;
+  cancelBtn.color = COLORS.textSecondary;
+  cancelBtn.background = COLORS.bgButton;
+  cancelBtn.cornerRadius = 4;
+  cancelBtn.fontSize = fontSize;
+  cancelBtn.fontFamily = "'Bebas Neue', sans-serif";
+  cancelBtn.onPointerEnterObservable.add(() => { cancelBtn.background = COLORS.bgButtonHover; });
+  cancelBtn.onPointerOutObservable.add(() => { cancelBtn.background = COLORS.bgButton; });
   cancelBtn.onPointerClickObservable.add(() => {
-    appearanceOverlay.isVisible = false;
-    editingUnit = null;
+    closeAppearanceEditor();
   });
-  overlayContent.addControl(cancelBtn);
+  buttonRow.addControl(cancelBtn);
+
+  // Preview area (shows on tablet/desktop, or top on mobile)
+  const previewArea = new Rectangle("previewArea");
+  previewArea.width = "100%";
+  previewArea.height = "100%";
+  previewArea.thickness = 0;
+  previewArea.background = "transparent";
+  if (isMobile) {
+    overlayGrid.addControl(previewArea, 0, 0);
+  } else {
+    overlayGrid.addControl(previewArea, 0, 1);
+  }
+
+  const previewLabel = new TextBlock("previewLabel");
+  previewLabel.text = "PREVIEW";
+  previewLabel.color = COLORS.textMuted;
+  previewLabel.fontSize = smallFontSize;
+  previewLabel.verticalAlignment = Control.VERTICAL_ALIGNMENT_TOP;
+  previewLabel.top = "10px";
+  previewArea.addControl(previewLabel);
+
+  function updatePreviewModel(): void {
+    // Clean up existing preview
+    if (previewMesh) {
+      previewMesh.dispose();
+      previewMesh = null;
+    }
+    previewAnimations.forEach(a => a.stop());
+    previewAnimations = [];
+
+    if (!editingUnit) return;
+
+    const unitClass = editingUnit.selectionArray[editingUnit.unitIndex]?.unitClass || "soldier";
+    const classData = getClassData(unitClass);
+    // Construct model path from modelFile base name and body type
+    const modelPath = `/models/${classData.modelFile}_${editingCustomization.body}.glb`;
+
+    SceneLoader.ImportMeshAsync("", modelPath, "", scene).then((result) => {
+      previewMesh = result.meshes[0];
+      previewMesh.position = new Vector3(0, 0, 0);
+      previewMesh.scaling = new Vector3(1, 1, 1);
+
+      // Apply skin tone
+      const skinMat = new StandardMaterial("previewSkin", scene);
+      skinMat.diffuseColor = Color3.FromHexString(SKIN_TONES[editingCustomization.skinTone]);
+      result.meshes.forEach((mesh) => {
+        if (mesh.name.toLowerCase().includes("skin") || mesh.name.toLowerCase().includes("body")) {
+          mesh.material = skinMat;
+        }
+      });
+
+      // Play idle animation
+      previewAnimations = result.animationGroups;
+      const idle = previewAnimations.find(a => a.name.toLowerCase().includes("idle"));
+      if (idle) {
+        idle.start(true);
+      }
+    }).catch((err) => {
+      console.warn("Failed to load preview model:", err);
+    });
+  }
 
   function openAppearanceEditor(playerId: string, unitIndex: number, selectionArray: UnitSelection[]): void {
     editingUnit = { playerId, unitIndex, selectionArray };
 
-    // Load current customization or defaults
     const current = selectionArray[unitIndex]?.customization;
     if (current) {
       editingCustomization = { ...current };
@@ -613,192 +796,552 @@ export function createLoadoutScene(
     const bodyBtns = appearanceOptionButtons.get("Body");
     if (bodyBtns) {
       bodyBtns.forEach((b, i) => {
-        b.background = (editingCustomization.body === "male" ? 0 : 1) === i ? "#4488ff" : "#333355";
+        b.background = (editingCustomization.body === "male" ? 0 : 1) === i ? COLORS.selected : COLORS.bgButton;
       });
     }
 
     const headBtns = appearanceOptionButtons.get("Head");
     if (headBtns) {
       headBtns.forEach((b, i) => {
-        b.background = editingCustomization.head === i ? "#4488ff" : "#333355";
+        b.background = editingCustomization.head === i ? COLORS.selected : COLORS.bgButton;
       });
     }
 
-    const handBtns = appearanceOptionButtons.get("Hand");
+    const handBtns = appearanceOptionButtons.get("Handedness");
     if (handBtns) {
       handBtns.forEach((b, i) => {
-        b.background = (editingCustomization.handedness === "right" ? 0 : 1) === i ? "#4488ff" : "#333355";
+        b.background = (editingCustomization.handedness === "right" ? 0 : 1) === i ? COLORS.selected : COLORS.bgButton;
       });
     }
 
-    const skinSwatches = appearanceColorSwatches.get("Skin");
+    const skinSwatches = appearanceColorSwatches.get("Skin Tone");
     if (skinSwatches) {
       skinSwatches.forEach((s, i) => {
         s.thickness = editingCustomization.skinTone === i ? 3 : 1;
-        s.color = editingCustomization.skinTone === i ? "white" : "#333333";
+        s.color = editingCustomization.skinTone === i ? COLORS.accentOrange : COLORS.borderWarm;
       });
     }
 
-    const hairSwatches = appearanceColorSwatches.get("Hair");
+    const hairSwatches = appearanceColorSwatches.get("Hair Color");
     if (hairSwatches) {
       hairSwatches.forEach((s, i) => {
         s.thickness = editingCustomization.hairColor === i ? 3 : 1;
-        s.color = editingCustomization.hairColor === i ? "white" : "#333333";
+        s.color = editingCustomization.hairColor === i ? COLORS.accentOrange : COLORS.borderWarm;
       });
     }
 
-    const eyeSwatches = appearanceColorSwatches.get("Eyes");
+    const eyeSwatches = appearanceColorSwatches.get("Eye Color");
     if (eyeSwatches) {
       eyeSwatches.forEach((s, i) => {
         s.thickness = editingCustomization.eyeColor === i ? 3 : 1;
-        s.color = editingCustomization.eyeColor === i ? "white" : "#333333";
+        s.color = editingCustomization.eyeColor === i ? COLORS.accentOrange : COLORS.borderWarm;
       });
     }
 
-    // Update title
-    overlayTitle.text = `Customize ${UNIT_DESIGNATIONS[unitIndex]} Appearance`;
-
+    overlayTitle.text = `${UNIT_DESIGNATIONS[unitIndex]} - EDIT APPEARANCE`;
     appearanceOverlay.isVisible = true;
+
+    // Load preview model
+    updatePreviewModel();
+  }
+
+  function closeAppearanceEditor(): void {
+    appearanceOverlay.isVisible = false;
+    editingUnit = null;
+    if (previewMesh) {
+      previewMesh.dispose();
+      previewMesh = null;
+    }
+    previewAnimations.forEach(a => a.stop());
+    previewAnimations = [];
   }
 
   // ============================================
-  // UNIT ROW
+  // UNIT ROW - Clean grid layout
+  // Mobile: [Greek] [3x3 buttons] [info icon]
+  // Tablet: [Greek] [3x3 buttons] [copy text]
+  // Desktop: [Greek] [3x3 buttons] [copy text] [preview]
   // ============================================
-
   function createUnitRow(
     unitIndex: number,
     playerId: string,
     selectionArray: UnitSelection[],
     parent: StackPanel
   ): void {
-    const row = new Rectangle(`${playerId}Unit${unitIndex}`);
-    row.width = "95%";
-    row.height = "100px";
-    row.background = "#2a2a4e";
-    row.cornerRadius = 8;
-    row.thickness = 1;
-    row.color = "#444466";
-    row.paddingTop = "5px";
-    row.paddingBottom = "5px";
-    parent.addControl(row);
-
-    const rowGrid = new Grid(`${playerId}Unit${unitIndex}Grid`);
-    rowGrid.width = "100%";
-    rowGrid.height = "100%";
-    rowGrid.addColumnDefinition(0.10); // Unit designation (Greek letter)
-    rowGrid.addColumnDefinition(0.28); // Class selector
-    rowGrid.addColumnDefinition(0.22); // Boost selector
-    rowGrid.addColumnDefinition(0.28); // Combat style
-    rowGrid.addColumnDefinition(0.12); // Appearance button
-    rowGrid.addRowDefinition(1);
-    row.addControl(rowGrid);
-
-    // Unit designation (Greek letter)
-    const unitDesignation = new TextBlock();
-    unitDesignation.text = UNIT_DESIGNATIONS[unitIndex] || `${unitIndex + 1}`;
-    unitDesignation.color = "#8888aa";
-    unitDesignation.fontSize = 28;
-    unitDesignation.fontWeight = "bold";
-    rowGrid.addControl(unitDesignation, 0, 0);
-
-    // Initialize selection for this unit if not exists
-    if (!selectionArray[unitIndex]) {
-      selectionArray[unitIndex] = {
-        unitClass: "soldier",
-        customization: {
-          body: "male",
-          combatStyle: "ranged",
-          handedness: "right",
-          head: 0,
-          hairColor: 0,
-          eyeColor: 2,
-          skinTone: 4,
-        },
-      };
-      // Clear it so we know it's not "confirmed" yet
-      selectionArray.length = unitIndex;
-    }
-
-    // Track current selections for this row
+    // State
     let selectedClass: UnitClass = "soldier";
-    let selectedBoost: number = 0;
+    let selectedBoost = 0;
     let selectedStyle: "ranged" | "melee" = "ranged";
 
-    // Class selector
-    const classContainer = createSelectorWithTooltip(
-      `${playerId}Unit${unitIndex}Class`,
-      "Class",
-      ALL_CLASSES.map(c => getClassData(c).name),
-      0,
-      (idx) => {
-        selectedClass = ALL_CLASSES[idx];
-        updateUnitSelection();
-      },
-      (idx, x, y) => {
-        const unitClass = ALL_CLASSES[idx];
-        const desc = CLASS_DESCRIPTIONS[unitClass];
-        showTooltip(`${desc.fluff}\n\n${desc.ability}`, x, y);
-      },
-      hideTooltip
-    );
-    rowGrid.addControl(classContainer, 0, 1);
+    // Card container
+    const row = new Rectangle(`${playerId}Unit${unitIndex}`);
+    row.width = "96%";
+    row.height = `${unitRowHeight}px`;
+    row.background = COLORS.bgUnitRow;
+    row.cornerRadius = 8;
+    row.thickness = 1;
+    row.color = COLORS.borderWarm;
+    row.paddingTop = "4px";
+    row.paddingBottom = "4px";
+    parent.addControl(row);
 
-    // Boost selector
-    const boostContainer = createSelectorWithTooltip(
-      `${playerId}Unit${unitIndex}Boost`,
-      "Boost",
-      ["#1", "#2", "#3"],
-      0,
-      (idx) => {
-        selectedBoost = idx;
-        updateUnitSelection();
-      },
-      (_idx, x, y) => {
-        showTooltip("Boosts coming soon! Choose your loadout bonus.", x, y);
-      },
-      hideTooltip
-    );
-    rowGrid.addControl(boostContainer, 0, 2);
+    // Main grid layout
+    const mainGrid = new Grid(`${playerId}Unit${unitIndex}Grid`);
+    mainGrid.width = "100%";
+    mainGrid.height = "100%";
 
-    // Combat style selector
-    const styleContainer = createSelectorWithTooltip(
-      `${playerId}Unit${unitIndex}Style`,
-      "Weapon",
-      ["Ranged", "Melee"],
-      0,
-      (idx) => {
-        selectedStyle = idx === 0 ? "ranged" : "melee";
-        updateUnitSelection();
-      },
-      (idx, x, y) => {
-        const style = idx === 0 ? "ranged" : "melee";
-        showTooltip(COMBAT_STYLE_DESCRIPTIONS[style], x, y);
-      },
-      hideTooltip
-    );
-    rowGrid.addControl(styleContainer, 0, 3);
+    // Column definitions based on screen size
+    if (isMobile) {
+      // [Greek 12%] [Buttons 88%] - info icon is now in button grid
+      mainGrid.addColumnDefinition(0.12);
+      mainGrid.addColumnDefinition(0.88);
+    } else if (isTablet) {
+      // [Greek 8%] [Buttons 50%] [Copy 42%]
+      mainGrid.addColumnDefinition(0.08);
+      mainGrid.addColumnDefinition(0.50);
+      mainGrid.addColumnDefinition(0.42);
+    } else {
+      // Desktop: [Greek 6%] [Buttons 40%] [Copy 30%] [Preview 24%]
+      mainGrid.addColumnDefinition(0.06);
+      mainGrid.addColumnDefinition(0.40);
+      mainGrid.addColumnDefinition(0.30);
+      mainGrid.addColumnDefinition(0.24);
+    }
+    mainGrid.addRowDefinition(1);
+    row.addControl(mainGrid);
 
-    // Appearance button
-    const appearanceBtn = Button.CreateSimpleButton(`${playerId}Unit${unitIndex}Appearance`, "✎");
-    appearanceBtn.width = "40px";
-    appearanceBtn.height = "40px";
-    appearanceBtn.color = "white";
-    appearanceBtn.background = "#555577";
-    appearanceBtn.cornerRadius = 20;
-    appearanceBtn.fontSize = 18;
-    appearanceBtn.onPointerEnterObservable.add(() => {
-      appearanceBtn.background = "#6666aa";
+    // === COLUMN 0: Greek Letter ===
+    const greekContainer = new Rectangle();
+    greekContainer.width = "100%";
+    greekContainer.height = "100%";
+    greekContainer.thickness = 0;
+    mainGrid.addControl(greekContainer, 0, 0);
+
+    const unitDesignation = new TextBlock();
+    unitDesignation.text = UNIT_DESIGNATIONS[unitIndex];
+    unitDesignation.color = COLORS.accentOrange;
+    unitDesignation.fontSize = headerFontSize;
+    unitDesignation.fontFamily = "'Bebas Neue', sans-serif";
+    unitDesignation.textHorizontalAlignment = Control.HORIZONTAL_ALIGNMENT_CENTER;
+    unitDesignation.textVerticalAlignment = Control.VERTICAL_ALIGNMENT_CENTER;
+    greekContainer.addControl(unitDesignation);
+
+    // === COLUMN 1: 3x3 Button Grid ===
+    const buttonGrid = new Grid(`${playerId}Unit${unitIndex}Buttons`);
+    buttonGrid.width = "100%";
+    buttonGrid.height = "100%";
+    buttonGrid.addColumnDefinition(1 / 3);
+    buttonGrid.addColumnDefinition(1 / 3);
+    buttonGrid.addColumnDefinition(1 / 3);
+    buttonGrid.addRowDefinition(1 / 3);
+    buttonGrid.addRowDefinition(1 / 3);
+    buttonGrid.addRowDefinition(1 / 3);
+    mainGrid.addControl(buttonGrid, 0, 1);
+
+    const btnWidth = isMobile ? "90%" : "85%";
+    const btnHeight = `${smallButtonHeight}px`;
+
+    // Helper to create a button
+    function createBtn(name: string, label: string, row: number, col: number, isSelected: boolean): Button {
+      const btn = Button.CreateSimpleButton(name, label);
+      btn.width = btnWidth;
+      btn.height = btnHeight;
+      btn.color = COLORS.textPrimary;
+      btn.background = isSelected ? COLORS.selected : COLORS.bgButton;
+      btn.cornerRadius = 4;
+      btn.fontSize = smallFontSize;
+      buttonGrid.addControl(btn, row, col);
+      return btn;
+    }
+
+    // Row 0: Class buttons (Soldier, Operator, Medic)
+    const classButtons: Button[] = [];
+    ALL_CLASSES.forEach((cls, i) => {
+      const btn = createBtn(`${playerId}${unitIndex}class${i}`, CLASS_INFO[cls].name, 0, i, i === 0);
+      btn.onPointerClickObservable.add(() => {
+        selectedClass = cls;
+        classButtons.forEach((b, j) => {
+          b.background = j === i ? COLORS.selected : COLORS.bgButton;
+        });
+        updateCopy();
+        updateUnitSelection();
+      });
+      classButtons.push(btn);
     });
-    appearanceBtn.onPointerOutObservable.add(() => {
-      appearanceBtn.background = "#555577";
+
+    // Row 1: Boost buttons (+25% HP, +25% Power, +25% Speed)
+    const boostButtons: Button[] = [];
+    BOOST_INFO.forEach((boost, i) => {
+      const btn = createBtn(`${playerId}${unitIndex}boost${i}`, boost.label, 1, i, i === 0);
+      btn.onPointerClickObservable.add(() => {
+        selectedBoost = i;
+        boostButtons.forEach((b, j) => {
+          b.background = j === i ? COLORS.selected : COLORS.bgButton;
+        });
+        updateCopy();
+        updateUnitSelection();
+      });
+      boostButtons.push(btn);
     });
-    appearanceBtn.onPointerClickObservable.add(() => {
+
+    // Row 2: Weapon buttons (Ranged, Melee) + Edit circle
+    const weaponButtons: Button[] = [];
+    (["ranged", "melee"] as const).forEach((style, i) => {
+      const btn = createBtn(`${playerId}${unitIndex}weapon${i}`, WEAPON_INFO[style].label, 2, i, i === 0);
+      btn.onPointerClickObservable.add(() => {
+        selectedStyle = style;
+        weaponButtons.forEach((b, j) => {
+          b.background = j === i ? COLORS.selected : COLORS.bgButton;
+        });
+        updateCopy();
+        updateUnitSelection();
+      });
+      weaponButtons.push(btn);
+    });
+
+    // Row 2, Col 2: Edit button (+ info circle on mobile)
+    const circleContainer = new StackPanel();
+    circleContainer.isVertical = false;
+    circleContainer.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_CENTER;
+    buttonGrid.addControl(circleContainer, 2, 2);
+
+    const circleSize = isMobile ? 34 : 38;
+    const circleGap = 6;
+
+    // Edit button - circle on mobile, pill on tablet/desktop
+    const editBtn = new Rectangle(`${playerId}${unitIndex}edit`);
+    if (isMobile) {
+      // Circle
+      editBtn.width = `${circleSize}px`;
+      editBtn.height = `${circleSize}px`;
+      editBtn.cornerRadius = circleSize / 2;
+    } else {
+      // Pill
+      editBtn.width = "75px";
+      editBtn.height = `${circleSize}px`;
+      editBtn.cornerRadius = circleSize / 2;
+    }
+    editBtn.background = COLORS.bgButton;
+    editBtn.thickness = 2;
+    editBtn.color = COLORS.borderWarm;
+    editBtn.paddingRight = isMobile ? `${circleGap / 2}px` : "0px";
+    circleContainer.addControl(editBtn);
+
+    if (isMobile) {
+      // Just icon on mobile
+      const editIcon = new TextBlock();
+      editIcon.text = "✎";
+      editIcon.color = COLORS.textSecondary;
+      editIcon.fontSize = 15;
+      editBtn.addControl(editIcon);
+    } else {
+      // Icon + "Edit" on tablet/desktop
+      const editContent = new StackPanel();
+      editContent.isVertical = false;
+      editContent.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_CENTER;
+      editBtn.addControl(editContent);
+
+      const editIcon = new TextBlock();
+      editIcon.text = "✎";
+      editIcon.color = COLORS.textSecondary;
+      editIcon.fontSize = 14;
+      editIcon.width = "18px";
+      editContent.addControl(editIcon);
+
+      const editLabel = new TextBlock();
+      editLabel.text = "Edit";
+      editLabel.color = COLORS.textSecondary;
+      editLabel.fontSize = smallFontSize;
+      editLabel.width = "32px";
+      editContent.addControl(editLabel);
+    }
+
+    editBtn.onPointerEnterObservable.add(() => {
+      editBtn.background = COLORS.bgButtonHover;
+      editBtn.color = COLORS.accentOrange;
+    });
+    editBtn.onPointerOutObservable.add(() => {
+      editBtn.background = COLORS.bgButton;
+      editBtn.color = COLORS.borderWarm;
+    });
+    editBtn.onPointerClickObservable.add(() => {
       openAppearanceEditor(playerId, unitIndex, selectionArray);
     });
-    rowGrid.addControl(appearanceBtn, 0, 4);
+
+    // === COLUMN 2: Copy text OR nothing (info icon moved to button grid) ===
+    let copyClassText: TextBlock | null = null;
+    let copyBoostText: TextBlock | null = null;
+    let copyWeaponText: TextBlock | null = null;
+
+    // Tooltip elements (used by mobile info circle)
+    let tooltipBackdrop: Rectangle | null = null;
+    let tooltipOverlay: Rectangle | null = null;
+    let tooltipClassText: TextBlock | null = null;
+    let tooltipBoostText: TextBlock | null = null;
+    let tooltipWeaponText: TextBlock | null = null;
+
+    if (isMobile) {
+      // Info circle (magnifying glass) - next to edit button
+      const infoCircle = new Rectangle(`${playerId}${unitIndex}info`);
+      infoCircle.width = `${circleSize}px`;
+      infoCircle.height = `${circleSize}px`;
+      infoCircle.cornerRadius = circleSize / 2;
+      infoCircle.background = COLORS.bgButton;
+      infoCircle.thickness = 2;
+      infoCircle.color = COLORS.borderWarm;
+      infoCircle.paddingLeft = `${circleGap / 2}px`;
+      circleContainer.addControl(infoCircle);
+
+      const infoIcon = new TextBlock();
+      infoIcon.text = "⌕";  // Monochrome magnifying glass
+      infoIcon.color = COLORS.textSecondary;
+      infoIcon.fontSize = isMobile ? 18 : 20;
+      infoCircle.addControl(infoIcon);
+
+      infoCircle.onPointerEnterObservable.add(() => {
+        infoCircle.background = COLORS.bgButtonHover;
+        infoCircle.color = COLORS.accentBlue;
+      });
+      infoCircle.onPointerOutObservable.add(() => {
+        infoCircle.background = COLORS.bgButton;
+        infoCircle.color = COLORS.borderWarm;
+      });
+
+      // Backdrop (click to close)
+      tooltipBackdrop = new Rectangle(`${playerId}${unitIndex}backdrop`);
+      tooltipBackdrop.width = "100%";
+      tooltipBackdrop.height = "100%";
+      tooltipBackdrop.background = "rgba(0, 0, 0, 0.6)";
+      tooltipBackdrop.thickness = 0;
+      tooltipBackdrop.zIndex = 99;
+      tooltipBackdrop.isVisible = false;
+      gui.addControl(tooltipBackdrop);
+
+      tooltipBackdrop.onPointerClickObservable.add(() => {
+        if (tooltipBackdrop) tooltipBackdrop.isVisible = false;
+        if (tooltipOverlay) tooltipOverlay.isVisible = false;
+      });
+
+      // Tooltip overlay for mobile
+      tooltipOverlay = new Rectangle(`${playerId}${unitIndex}tooltip`);
+      tooltipOverlay.width = "85%";
+      tooltipOverlay.height = "auto";
+      tooltipOverlay.adaptHeightToChildren = true;
+      tooltipOverlay.background = COLORS.bgPanel;
+      tooltipOverlay.cornerRadius = 12;
+      tooltipOverlay.thickness = 2;
+      tooltipOverlay.color = COLORS.borderWarm;
+      tooltipOverlay.verticalAlignment = Control.VERTICAL_ALIGNMENT_CENTER;
+      tooltipOverlay.zIndex = 100;
+      tooltipOverlay.isVisible = false;
+      gui.addControl(tooltipOverlay);
+
+      // Inner container for padding (Rectangle padding doesn't work well)
+      const tooltipInner = new Rectangle();
+      tooltipInner.width = "100%";
+      tooltipInner.height = "auto";
+      tooltipInner.adaptHeightToChildren = true;
+      tooltipInner.thickness = 0;
+      tooltipInner.background = "transparent";
+      tooltipInner.paddingTop = "24px";
+      tooltipInner.paddingBottom = "28px";
+      tooltipInner.paddingLeft = "24px";
+      tooltipInner.paddingRight = "24px";
+      tooltipOverlay.addControl(tooltipInner);
+
+      const tooltipStack = new StackPanel();
+      tooltipStack.width = "100%";
+      tooltipStack.isVertical = true;
+      tooltipInner.addControl(tooltipStack);
+
+      const tooltipTitle = new TextBlock();
+      tooltipTitle.text = `UNIT ${UNIT_DESIGNATIONS[unitIndex]}`;
+      tooltipTitle.color = COLORS.accentOrange;
+      tooltipTitle.fontSize = headerFontSize;
+      tooltipTitle.fontFamily = "'Bebas Neue', sans-serif";
+      tooltipTitle.height = "36px";
+      tooltipTitle.textHorizontalAlignment = Control.HORIZONTAL_ALIGNMENT_LEFT;
+      tooltipTitle.paddingBottom = "8px";
+      tooltipStack.addControl(tooltipTitle);
+
+      tooltipClassText = new TextBlock();
+      tooltipClassText.color = COLORS.textPrimary;
+      tooltipClassText.fontSize = fontSize;
+      tooltipClassText.textWrapping = true;
+      tooltipClassText.resizeToFit = true;
+      tooltipClassText.textHorizontalAlignment = Control.HORIZONTAL_ALIGNMENT_LEFT;
+      tooltipClassText.paddingBottom = "16px";
+      tooltipStack.addControl(tooltipClassText);
+
+      tooltipBoostText = new TextBlock();
+      tooltipBoostText.color = COLORS.textSecondary;
+      tooltipBoostText.fontSize = fontSize;
+      tooltipBoostText.textWrapping = true;
+      tooltipBoostText.resizeToFit = true;
+      tooltipBoostText.textHorizontalAlignment = Control.HORIZONTAL_ALIGNMENT_LEFT;
+      tooltipBoostText.paddingBottom = "16px";
+      tooltipStack.addControl(tooltipBoostText);
+
+      tooltipWeaponText = new TextBlock();
+      tooltipWeaponText.color = COLORS.textSecondary;
+      tooltipWeaponText.fontSize = fontSize;
+      tooltipWeaponText.textWrapping = true;
+      tooltipWeaponText.resizeToFit = true;
+      tooltipWeaponText.textHorizontalAlignment = Control.HORIZONTAL_ALIGNMENT_LEFT;
+      tooltipStack.addControl(tooltipWeaponText);
+
+      // Update tooltip content
+      const updateTooltip = () => {
+        if (tooltipClassText) tooltipClassText.text = `CLASS: ${CLASS_INFO[selectedClass].name}\n${CLASS_INFO[selectedClass].desc}`;
+        if (tooltipBoostText) tooltipBoostText.text = `BOOST: ${BOOST_INFO[selectedBoost].label}\n${BOOST_INFO[selectedBoost].desc}`;
+        if (tooltipWeaponText) tooltipWeaponText.text = `WEAPON: ${WEAPON_INFO[selectedStyle].label}\n${WEAPON_INFO[selectedStyle].desc}`;
+      };
+      updateTooltip();
+
+      infoCircle.onPointerClickObservable.add(() => {
+        updateTooltip();
+        if (tooltipBackdrop) tooltipBackdrop.isVisible = true;
+        if (tooltipOverlay) tooltipOverlay.isVisible = true;
+      });
+
+      // Store reference for updates
+      copyClassText = tooltipClassText;
+      copyBoostText = tooltipBoostText;
+      copyWeaponText = tooltipWeaponText;
+
+    } else {
+      // Tablet/Desktop: Show copy text inline
+      const copyContainer = new Rectangle();
+      copyContainer.width = "100%";
+      copyContainer.height = "100%";
+      copyContainer.thickness = 0;
+      copyContainer.paddingLeft = "8px";
+      copyContainer.paddingRight = "8px";
+      copyContainer.paddingTop = "6px";
+      copyContainer.paddingBottom = "6px";
+      mainGrid.addControl(copyContainer, 0, 2);
+
+      const copyStack = new StackPanel();
+      copyStack.width = "100%";
+      copyStack.height = "100%";
+      copyStack.isVertical = true;
+      copyStack.verticalAlignment = Control.VERTICAL_ALIGNMENT_TOP;
+      copyContainer.addControl(copyStack);
+
+      copyClassText = new TextBlock();
+      copyClassText.text = CLASS_INFO[selectedClass].desc;
+      copyClassText.color = COLORS.textSecondary;
+      copyClassText.fontSize = tinyFontSize;
+      copyClassText.textWrapping = true;
+      copyClassText.textHorizontalAlignment = Control.HORIZONTAL_ALIGNMENT_LEFT;
+      copyClassText.textVerticalAlignment = Control.VERTICAL_ALIGNMENT_TOP;
+      copyClassText.height = "50px";
+      copyStack.addControl(copyClassText);
+
+      copyBoostText = new TextBlock();
+      copyBoostText.text = BOOST_INFO[selectedBoost].desc;
+      copyBoostText.color = COLORS.textMuted;
+      copyBoostText.fontSize = tinyFontSize;
+      copyBoostText.textWrapping = true;
+      copyBoostText.textHorizontalAlignment = Control.HORIZONTAL_ALIGNMENT_LEFT;
+      copyBoostText.textVerticalAlignment = Control.VERTICAL_ALIGNMENT_TOP;
+      copyBoostText.height = "30px";
+      copyStack.addControl(copyBoostText);
+
+      copyWeaponText = new TextBlock();
+      copyWeaponText.text = WEAPON_INFO[selectedStyle].desc;
+      copyWeaponText.color = COLORS.textMuted;
+      copyWeaponText.fontSize = tinyFontSize;
+      copyWeaponText.textWrapping = true;
+      copyWeaponText.textHorizontalAlignment = Control.HORIZONTAL_ALIGNMENT_LEFT;
+      copyWeaponText.textVerticalAlignment = Control.VERTICAL_ALIGNMENT_TOP;
+      copyWeaponText.height = "30px";
+      copyStack.addControl(copyWeaponText);
+    }
+
+    // === COLUMN 3: Preview (Desktop only) ===
+    let unitPreviewMesh: AbstractMesh | null = null;
+    let unitPreviewAnims: AnimationGroup[] = [];
+    let loadUnitPreview: (() => void) | null = null;
+
+    if (isDesktop) {
+      const previewContainer = new Rectangle();
+      previewContainer.width = "100%";
+      previewContainer.height = "100%";
+      previewContainer.thickness = 0;
+      previewContainer.background = "transparent";
+      previewContainer.cornerRadius = 6;
+      mainGrid.addControl(previewContainer, 0, 3);
+
+      // Position offset for each unit (stack them horizontally in world space)
+      const previewXOffset = (unitIndex - 1) * 2.5; // -2.5, 0, 2.5 for units 0, 1, 2
+      const previewYOffset = 0;
+
+      // Load preview model
+      loadUnitPreview = (): void => {
+        // Clean up existing
+        if (unitPreviewMesh) {
+          unitPreviewMesh.dispose();
+          unitPreviewMesh = null;
+        }
+        unitPreviewAnims.forEach(a => a.stop());
+        unitPreviewAnims = [];
+
+        const classData = getClassData(selectedClass);
+        const body = selectionArray[unitIndex]?.customization?.body || "male";
+        const modelPath = `/models/${classData.modelFile}_${body}.glb`;
+
+        SceneLoader.ImportMeshAsync("", modelPath, "", scene).then((result) => {
+          unitPreviewMesh = result.meshes[0];
+          unitPreviewMesh.position = new Vector3(previewXOffset, previewYOffset, 0);
+          unitPreviewMesh.scaling = new Vector3(0.8, 0.8, 0.8);
+          unitPreviewMesh.rotation = new Vector3(0, Math.PI * 0.1, 0);
+
+          // Play idle animation
+          unitPreviewAnims = result.animationGroups;
+          const idle = unitPreviewAnims.find(a => a.name.toLowerCase().includes("idle"));
+          if (idle) {
+            idle.start(true);
+          }
+        }).catch((err) => {
+          console.warn("Failed to load unit preview:", err);
+        });
+      };
+
+      // Load initial preview
+      loadUnitPreview();
+    }
+
+    // Update copy text and preview
+    function updateCopy(): void {
+      if (copyClassText) {
+        if (isMobile) {
+          copyClassText.text = `CLASS: ${CLASS_INFO[selectedClass].name}\n${CLASS_INFO[selectedClass].desc}`;
+        } else {
+          copyClassText.text = CLASS_INFO[selectedClass].desc;
+        }
+      }
+      if (copyBoostText) {
+        if (isMobile) {
+          copyBoostText.text = `BOOST: ${BOOST_INFO[selectedBoost].label}\n${BOOST_INFO[selectedBoost].desc}`;
+        } else {
+          copyBoostText.text = BOOST_INFO[selectedBoost].desc;
+        }
+      }
+      if (copyWeaponText) {
+        if (isMobile) {
+          copyWeaponText.text = `WEAPON: ${WEAPON_INFO[selectedStyle].label}\n${WEAPON_INFO[selectedStyle].desc}`;
+        } else {
+          copyWeaponText.text = WEAPON_INFO[selectedStyle].desc;
+        }
+      }
+      // Update 3D preview on desktop
+      if (loadUnitPreview) {
+        loadUnitPreview();
+      }
+    }
 
     function updateUnitSelection(): void {
-      // Ensure array is long enough
       while (selectionArray.length < unitIndex + 1) {
         selectionArray.push({
           unitClass: "soldier",
@@ -814,9 +1357,7 @@ export function createLoadoutScene(
         });
       }
 
-      // Preserve existing customization if it exists, otherwise randomize
       const existingCustomization = selectionArray[unitIndex]?.customization;
-
       selectionArray[unitIndex] = {
         unitClass: selectedClass,
         customization: existingCustomization ? {
@@ -837,71 +1378,7 @@ export function createLoadoutScene(
       updateStartButton();
     }
 
-    // Initialize the selection
     updateUnitSelection();
-  }
-
-  function createSelectorWithTooltip(
-    id: string,
-    label: string,
-    options: string[],
-    defaultIdx: number,
-    onChange: (idx: number) => void,
-    onHover: (idx: number, x: number, y: number) => void,
-    onLeave: () => void
-  ): StackPanel {
-    const container = new StackPanel(id);
-    container.width = "95%";
-    container.isVertical = true;
-
-    const labelText = new TextBlock(`${id}Label`);
-    labelText.text = label;
-    labelText.color = "#888888";
-    labelText.fontSize = 11;
-    labelText.height = "16px";
-    labelText.textHorizontalAlignment = Control.HORIZONTAL_ALIGNMENT_CENTER;
-    container.addControl(labelText);
-
-    const buttonsStack = new StackPanel(`${id}Buttons`);
-    buttonsStack.isVertical = true;
-    buttonsStack.width = "100%";
-    container.addControl(buttonsStack);
-
-    const buttons: Button[] = [];
-
-    options.forEach((opt, i) => {
-      const btn = Button.CreateSimpleButton(`${id}_${i}`, opt);
-      btn.width = "90%";
-      btn.height = "24px";
-      btn.color = "white";
-      btn.background = i === defaultIdx ? "#4488ff" : "#333355";
-      btn.cornerRadius = 4;
-      btn.fontSize = 11;
-      btn.paddingTop = "2px";
-      btn.paddingBottom = "2px";
-
-      btn.onPointerEnterObservable.add((_, state) => {
-        const x = state.currentTarget?.centerX ?? 0;
-        const y = state.currentTarget?.centerY ?? 0;
-        onHover(i, x, y);
-      });
-
-      btn.onPointerOutObservable.add(() => {
-        onLeave();
-      });
-
-      btn.onPointerClickObservable.add(() => {
-        buttons.forEach((b, j) => {
-          b.background = j === i ? "#4488ff" : "#333355";
-        });
-        onChange(i);
-      });
-
-      buttons.push(btn);
-      buttonsStack.addControl(btn);
-    });
-
-    return container;
   }
 
   return scene;

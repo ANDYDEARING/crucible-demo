@@ -44,6 +44,8 @@ When implementing features:
 3. Start with minimal working prototype, iterate based on feedback
 4. Keep the game playable at each stage
 
+**Note**: Never run the dev server (`npm run dev`) - the user handles that. Only run `npm run build` to verify TypeScript compiles.
+
 ## Open Questions (see docs/requirements.md)
 
 - Turn structure (full team vs alternating activations)
