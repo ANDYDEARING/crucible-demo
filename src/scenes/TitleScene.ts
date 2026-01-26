@@ -6,7 +6,7 @@ import {
   Color4,
 } from "@babylonjs/core";
 import { AdvancedDynamicTexture, TextBlock, StackPanel, Rectangle, Control } from "@babylonjs/gui";
-import type { SceneName } from "../main";
+import type { SceneName } from "../types";
 import {
   SCENE_BACKGROUNDS,
   TITLE_HEAT_COLORS,

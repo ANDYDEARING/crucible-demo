@@ -3,9 +3,10 @@ import { createStartScene } from "./scenes/StartScene";
 import { createTitleScene } from "./scenes/TitleScene";
 import { createLoadoutScene } from "./scenes/LoadoutScene";
 import { createBattleScene } from "./scenes/BattleScene";
-import type { Loadout } from "./types";
+import type { Loadout, SceneName } from "./types";
 
-export type SceneName = "start" | "title" | "loadout" | "battle";
+// Re-export for backwards compatibility
+export type { SceneName } from "./types";
 
 const canvas = document.getElementById("game-canvas") as HTMLCanvasElement;
 const engine = new Engine(canvas, true);

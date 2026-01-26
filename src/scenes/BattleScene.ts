@@ -12,12 +12,21 @@ import {
   PointerEventTypes,
   SceneLoader,
   AbstractMesh,
-  AnimationGroup,
   PBRMaterial,
 } from "@babylonjs/core";
 import "@babylonjs/loaders/glTF";
 import { AdvancedDynamicTexture, TextBlock, Button, Rectangle, StackPanel, Grid, Control } from "@babylonjs/gui";
-import { type Loadout, type UnitSelection, type UnitCustomization, type UnitClass, getClassData } from "../types";
+import {
+  type Loadout,
+  type UnitSelection,
+  type UnitCustomization,
+  type UnitClass,
+  type Team,
+  type ActionMode,
+  type TurnState,
+  type Unit,
+  getClassData,
+} from "../types";
 
 // Import centralized config - colors and palettes
 import {
@@ -85,70 +94,6 @@ import { MUSIC, SFX, AUDIO_VOLUMES, LOOP_BUFFER_TIME } from "../config";
 
 // Import utility functions
 import { hexToColor3, createMusicPlayer, playSfx, rgbToColor3 } from "../utils";
-
-type Team = "player1" | "player2";
-type ActionMode = "none" | "move" | "attack" | "ability";
-
-// Pending action for preview system
-interface PendingAction {
-  type: "move" | "attack" | "ability";
-  targetX?: number;
-  targetZ?: number;
-  targetUnit?: Unit;
-  abilityName?: string;
-}
-
-// Turn state for preview/undo system
-interface TurnState {
-  unit: Unit;
-  actionsRemaining: number;
-  pendingActions: PendingAction[];
-  originalPosition: { x: number; z: number };
-  originalFacing: number;
-}
-
-// Facing configuration for a unit's model
-interface FacingConfig {
-  currentAngle: number;      // Current facing angle in radians
-  baseOffset: number;        // Model's base rotation offset (model-specific)
-  isFlipped: boolean;        // Whether model has negative X scale (right-handed)
-}
-
-interface Unit {
-  mesh: Mesh;
-  unitClass: UnitClass;
-  team: Team;
-  gridX: number;
-  gridZ: number;
-  moveRange: number;
-  attackRange: number;
-  hp: number;
-  maxHp: number;
-  attack: number;
-  healAmount: number;
-  hpBar?: Rectangle;
-  hpBarBg?: Rectangle;
-  originalColor: Color3;
-  // Action tracking (legacy - will migrate to TurnState)
-  hasMoved: boolean;
-  hasAttacked: boolean;
-  // Initiative system
-  speed: number;
-  speedBonus: number;  // Bonus from skipping, consumed after next turn
-  accumulator: number; // Builds up until >= 10, then unit acts
-  loadoutIndex: number; // Original position in loadout for tie-breaking
-  // 3D model data
-  modelRoot?: AbstractMesh;
-  modelMeshes?: AbstractMesh[];
-  animationGroups?: AnimationGroup[];
-  customization?: UnitCustomization;
-  teamColor: Color3;
-  // Facing system
-  facing: FacingConfig;
-  // Ability states
-  isConcealed: boolean;
-  isCovering: boolean;
-}
 
 export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, loadout: Loadout | null): Scene {
   const scene = new Scene(engine);
@@ -1605,8 +1550,8 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
   void getAttackableEnemiesSimple;
 
   function getHealableAllies(unit: Unit, fromX?: number, fromZ?: number): Unit[] {
-    // Only support can heal, needs actions remaining
-    // Heal is adjacent only (distance <= 1, including self)
+    // Only medic can heal, needs actions remaining
+    // Heal works on self or all 8 adjacent tiles with LOS (diagonals require LOS check)
     if (unit.healAmount <= 0 || !hasActionsRemaining()) return [];
 
     // Use shadow position if pending move, otherwise use provided or current position
@@ -1620,14 +1565,24 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
 
       // For the healer themselves with a pending move:
       // They can self-heal but only by clicking the shadow position (distance 0 from effective)
-      // Their original gridX/Z is no longer valid for targeting
       if (u === unit && hasPendingMove) {
-        // Healer is at effectiveX/Z (shadow), so distance is 0 - allowed
         return true;
       }
 
-      const distance = Math.abs(u.gridX - effectiveX) + Math.abs(u.gridZ - effectiveZ);
-      return distance <= 1; // Self (0) or adjacent (1) only
+      // Self-heal (distance 0) is always allowed
+      if (u.gridX === effectiveX && u.gridZ === effectiveZ) {
+        return true;
+      }
+
+      // Check if ally is adjacent (including diagonals)
+      if (!isAdjacent(effectiveX, effectiveZ, u.gridX, u.gridZ)) {
+        return false;
+      }
+
+      // Diagonals require LOS check, ordinals always have LOS
+      const isDiagonal = u.gridX !== effectiveX && u.gridZ !== effectiveZ;
+      const hasLOS = isDiagonal ? hasLineOfSight(effectiveX, effectiveZ, u.gridX, u.gridZ, unit) : true;
+      return hasLOS;
     });
   }
 
@@ -1721,6 +1676,7 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
   // ============================================
 
   // Highlight healable allies for Medic's Heal ability
+  // Works on self or all 8 adjacent tiles with LOS (diagonals require LOS check)
   function highlightHealTargets(unit: Unit, fromX?: number, fromZ?: number): void {
     clearHighlights();
     healableUnits = [];
@@ -1732,7 +1688,7 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
     const effectiveX = fromX ?? shadowPosition?.x ?? unit.gridX;
     const effectiveZ = fromZ ?? shadowPosition?.z ?? unit.gridZ;
 
-    // Can heal self or adjacent allies
+    // Can heal self or adjacent allies (all 8 directions with LOS)
     for (const ally of units) {
       if (ally.team !== unit.team) continue;
       if (ally.hp >= ally.maxHp) continue;  // Already at full health
@@ -1748,8 +1704,25 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
         continue;
       }
 
-      const distance = Math.abs(ally.gridX - effectiveX) + Math.abs(ally.gridZ - effectiveZ);
-      if (distance <= 1) {  // Self (0) or adjacent (1)
+      // Self-heal (distance 0) is always allowed
+      if (ally.gridX === effectiveX && ally.gridZ === effectiveZ) {
+        const tile = tiles[ally.gridX][ally.gridZ];
+        tile.material = healableMaterial;
+        highlightedTiles.push(tile);
+        healableUnits.push(ally);
+        continue;
+      }
+
+      // Check if ally is adjacent (including diagonals)
+      if (!isAdjacent(effectiveX, effectiveZ, ally.gridX, ally.gridZ)) {
+        continue;
+      }
+
+      // Diagonals require LOS check, ordinals always have LOS
+      const isDiagonal = ally.gridX !== effectiveX && ally.gridZ !== effectiveZ;
+      const hasLOS = isDiagonal ? hasLineOfSight(effectiveX, effectiveZ, ally.gridX, ally.gridZ, unit) : true;
+
+      if (hasLOS) {
         const tile = tiles[ally.gridX][ally.gridZ];
         tile.material = healableMaterial;
         highlightedTiles.push(tile);

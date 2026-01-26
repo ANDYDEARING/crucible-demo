@@ -6,7 +6,7 @@ import {
   Vector3,
 } from "@babylonjs/core";
 import { AdvancedDynamicTexture, TextBlock, Rectangle } from "@babylonjs/gui";
-import type { SceneName } from "../main";
+import type { SceneName } from "../types";
 import { SCENE_BACKGROUNDS } from "../config";
 
 export function createStartScene(
