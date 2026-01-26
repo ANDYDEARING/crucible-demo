@@ -23,6 +23,7 @@ import {
   Image,
 } from "@babylonjs/gui";
 import { ALL_CLASSES, getClassData, Loadout, UnitSelection, UnitCustomization, UnitClass } from "../types";
+import { getGameMode } from "../main";
 
 // Import centralized config
 import {
@@ -101,11 +102,16 @@ export function createLoadoutScene(
   gui.addControl(mainGrid);
 
   // Track selections - using centralized default color indices
+  // Get game mode that was set when user selected from title screen
+  const { mode: gameMode, humanTeam } = getGameMode();
+
   const selections: Loadout = {
     player1: [],
     player2: [],
     player1TeamColor: TEAM_COLORS[DEFAULT_PLAYER1_COLOR_INDEX].hex,
     player2TeamColor: TEAM_COLORS[DEFAULT_PLAYER2_COLOR_INDEX].hex,
+    gameMode,
+    humanTeam,
   };
 
   // Track team color UI refresh callbacks
@@ -387,9 +393,16 @@ export function createLoadoutScene(
     return preview;
   }
 
-  // Create player panels
-  const player1Panel = createPlayerPanel("Player 1", "#4488ff", selections.player1, "left");
-  const player2Panel = createPlayerPanel("Player 2", "#ff8844", selections.player2, "right");
+  // Create player panels - show "Computer" label for AI-controlled team in PvE
+  const player1Name = gameMode === "local-pve" && humanTeam !== "player1"
+    ? "Computer (Medium)"
+    : "Player 1";
+  const player2Name = gameMode === "local-pve" && humanTeam !== "player2"
+    ? "Computer (Medium)"
+    : "Player 2";
+
+  const player1Panel = createPlayerPanel(player1Name, "#4488ff", selections.player1, "left");
+  const player2Panel = createPlayerPanel(player2Name, "#ff8844", selections.player2, "right");
 
   mainGrid.addControl(player1Panel, 0, 0);
   mainGrid.addControl(player2Panel, 0, 1);

@@ -81,3 +81,20 @@ export {
   getCoverTiles,
   getEnemyCoveringTile,
 } from "./rules";
+
+// Controllers
+export {
+  type Controller,
+  type ControllerContext,
+  type IssueCommandFn,
+  type ExecuteTurnFn,
+  type AIDifficulty,
+  type SendCommandFn,
+  HumanController,
+  AIController,
+  NetworkController,
+  ControllerManager,
+  createLocalPvPControllers,
+  createPvEControllers,
+  createSimulationControllers,
+} from "./controllers";

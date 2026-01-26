@@ -98,6 +98,8 @@ import { hexToColor3, createMusicPlayer, playSfx, rgbToColor3 } from "../utils";
 // Import command pattern for action queue
 import {
   type CommandExecutor,
+  type ControllerContext,
+  type BattleCommand,
   CommandQueue,
   createMoveCommand,
   createAttackCommand,
@@ -105,6 +107,9 @@ import {
   createConcealCommand,
   createCoverCommand,
   processCommandQueue,
+  ControllerManager,
+  createLocalPvPControllers,
+  createPvEControllers,
 } from "../battle";
 
 // Pure game logic is available in /src/battle/ for headless simulations.
@@ -113,6 +118,7 @@ import {
 // See: /src/battle/state.ts (UnitState, BattleState)
 //      /src/battle/rules.ts (movement, LOS, combat, turns)
 //      /src/battle/commands.ts (Command pattern for actions)
+//      /src/battle/controllers.ts (Controller abstraction for PvE/PvP)
 
 export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, loadout: Loadout | null): Scene {
   const scene = new Scene(engine);
@@ -530,6 +536,101 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
     const index = parseInt(indexStr, 10);
     return units.find((u, i) => u.team === team && i === index);
   }
+
+  // ============================================
+  // CONTROLLER SYSTEM
+  // ============================================
+  // Controllers handle input for each team (human, AI, or network).
+  // Default is local PvP (both human). Can be changed for PvE or online play.
+
+  // Create controller manager based on game mode from loadout
+  let controllerManager: ControllerManager;
+  if (loadout?.gameMode === "local-pve") {
+    // PvE mode: human controls one team, AI controls the other
+    const humanTeam = loadout.humanTeam || "player1";
+    controllerManager = createPvEControllers(humanTeam, "medium");
+  } else {
+    // Default: local PvP (both teams controlled by humans)
+    controllerManager = createLocalPvPControllers();
+  }
+
+  /** Create controller context for the current turn */
+  function createControllerContext(unit: Unit): ControllerContext {
+    return {
+      state: extractBattleState(),
+      unit: extractUnitState(unit, units.indexOf(unit)),
+      actionsRemaining: turnState?.actionsRemaining ?? 0,
+
+      issueCommand(command: BattleCommand): boolean {
+        if (!turnState || turnState.actionsRemaining <= 0) return false;
+
+        // Route command to appropriate queue function
+        switch (command.type) {
+          case "move":
+            if (isValidMove(command.targetX, command.targetZ)) {
+              queueMoveAction(unit, command.targetX, command.targetZ);
+              return true;
+            }
+            return false;
+
+          case "attack": {
+            const target = findUnitById(command.targetUnitId);
+            if (target && attackableUnits.includes(target)) {
+              queueAttackAction(unit, target);
+              return true;
+            }
+            return false;
+          }
+
+          case "heal": {
+            const target = findUnitById(command.targetUnitId);
+            if (target && healableUnits.includes(target)) {
+              queueHealAction(unit, target);
+              return true;
+            }
+            return false;
+          }
+
+          case "conceal":
+            if (unit.unitClass === "operator" && !unit.isConcealed) {
+              queueConcealAction(unit);
+              return true;
+            }
+            return false;
+
+          case "cover":
+            if (unit.unitClass === "soldier") {
+              queueCoverAction(unit);
+              return true;
+            }
+            return false;
+        }
+      },
+
+      executeTurn(): void {
+        executeQueuedActions();
+      },
+
+      undoLastCommand(): void {
+        undoLastAction();
+      },
+    };
+  }
+
+  /** Get current controller manager (for external configuration) */
+  function getControllerManager(): ControllerManager {
+    return controllerManager;
+  }
+
+  /** Set controller manager (to switch between PvP/PvE modes) */
+  function setControllerManager(manager: ControllerManager): void {
+    controllerManager.dispose();
+    controllerManager = manager;
+  }
+
+  // Export controller functions for external use
+  void getControllerManager;
+  void setControllerManager;
 
   // Callback for when a unit's turn starts (set later by command menu)
   let onTurnStartCallback: ((unit: Unit) => void) | null = null;
@@ -1443,6 +1544,11 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
     if (onTurnStartCallback) {
       onTurnStartCallback(unit);
     }
+
+    // Notify controller that turn has started
+    // This allows AI/network controllers to take over
+    const context = createControllerContext(unit);
+    controllerManager.notifyTurnStart(unit.team, context);
   }
 
   function endCurrentUnitTurn(): void {
@@ -1465,6 +1571,9 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
     clearShadowPreview();
     clearAttackPreview();
     clearIntentIndicators();
+
+    // Notify controller that turn ended
+    controllerManager.notifyTurnEnd(unit.team);
 
     lastActingTeam = unit.team;
     clearHighlights();
@@ -2410,9 +2519,11 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
 
     if (player2Units.length === 0) {
       gameOver = true;
+      controllerManager.notifyGameEnd("player1");
       showGameOver(player1TeamColor, "Player 1");
     } else if (player1Units.length === 0) {
       gameOver = true;
+      controllerManager.notifyGameEnd("player2");
       showGameOver(player2TeamColor, "Player 2");
     }
   }

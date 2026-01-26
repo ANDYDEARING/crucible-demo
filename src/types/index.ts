@@ -47,6 +47,13 @@ export interface UnitCustomization {
 }
 
 // =============================================================================
+// GAME MODE
+// =============================================================================
+
+/** Game mode determines controller configuration */
+export type GameMode = "local-pvp" | "local-pve";
+
+// =============================================================================
 // LOADOUT
 // =============================================================================
 
@@ -62,6 +69,8 @@ export interface Loadout {
   player2: UnitSelection[];
   player1TeamColor?: string;  // Hex color for player 1 team
   player2TeamColor?: string;  // Hex color for player 2 team
+  gameMode: GameMode;         // PvP or PvE
+  humanTeam?: "player1" | "player2";  // Which team is human in PvE
 }
 
 // =============================================================================
