@@ -7,6 +7,7 @@ import {
 } from "@babylonjs/core";
 import { AdvancedDynamicTexture, TextBlock, Rectangle } from "@babylonjs/gui";
 import type { SceneName } from "../main";
+import { SCENE_BACKGROUNDS } from "../config";
 
 export function createStartScene(
   engine: Engine,
@@ -14,7 +15,10 @@ export function createStartScene(
   navigateTo: (scene: SceneName) => void
 ): Scene {
   const scene = new Scene(engine);
-  scene.clearColor = new Color4(0.05, 0.05, 0.1, 1);
+
+  // Use centralized scene background color
+  const bg = SCENE_BACKGROUNDS.start;
+  scene.clearColor = new Color4(bg.r, bg.g, bg.b, bg.a);
 
   // Required camera for scene to render
   new FreeCamera("camera", Vector3.Zero(), scene);

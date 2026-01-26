@@ -7,6 +7,15 @@ import {
 } from "@babylonjs/core";
 import { AdvancedDynamicTexture, TextBlock, StackPanel, Rectangle, Control } from "@babylonjs/gui";
 import type { SceneName } from "../main";
+import {
+  SCENE_BACKGROUNDS,
+  TITLE_HEAT_COLORS,
+  TITLE_TEXT_COLORS,
+  TITLE_FADE_IN_DURATION,
+  TITLE_FADE_IN_DELAY,
+} from "../config";
+import { MUSIC, AUDIO_VOLUMES, LOOP_BUFFER_TIME, DEBUG_SKIP_OFFSET } from "../config";
+import { createMusicPlayer } from "../utils";
 
 // Ember particle for floating fire effect
 interface Ember {
@@ -26,25 +35,20 @@ export function createTitleScene(
   navigateTo: (scene: SceneName) => void
 ): Scene {
   const scene = new Scene(engine);
-  // Deep black with subtle warm undertone
-  scene.clearColor = new Color4(0.02, 0.01, 0.01, 1);
 
-  // Background music
-  const music = new Audio("/audio/rise_above_loop_v3.m4a");
-  music.loop = true;
-  music.volume = 0.5;
-  music.addEventListener("timeupdate", () => {
-    if (music.duration && music.currentTime >= music.duration - 0.5) {
-      music.currentTime = 0;
-    }
-  });
+  // Use centralized scene background color (deep black with subtle warm undertone)
+  const bg = SCENE_BACKGROUNDS.title;
+  scene.clearColor = new Color4(bg.r, bg.g, bg.b, bg.a);
+
+  // Background music - using centralized audio config
+  const music = createMusicPlayer(MUSIC.title, AUDIO_VOLUMES.music, true, LOOP_BUFFER_TIME);
   music.play();
 
-  // Press S to skip to 10 seconds before end (to test loop)
+  // Press S to skip to near end (to test loop behavior)
   const skipHandler = (e: KeyboardEvent) => {
     if (e.key === "s" || e.key === "S") {
       if (music.duration) {
-        music.currentTime = Math.max(0, music.duration - 10);
+        music.currentTime = Math.max(0, music.duration - DEBUG_SKIP_OFFSET);
       }
     }
   };
@@ -70,13 +74,9 @@ export function createTitleScene(
   baseGlow.background = "linear-gradient(to top, rgba(139, 35, 0, 0.35) 0%, rgba(80, 20, 0, 0.15) 30%, rgba(30, 8, 0, 0.05) 50%, transparent 70%)";
   gui.addControl(baseGlow);
 
-  // Pulsing heat layers
+  // Pulsing heat layers - using centralized color palette
   const heatLayers: Rectangle[] = [];
-  const heatColors = [
-    { r: 180, g: 50, b: 0 },   // Deep orange-red
-    { r: 255, g: 80, b: 0 },   // Bright orange
-    { r: 255, g: 120, b: 20 }, // Amber
-  ];
+  const heatColors = TITLE_HEAT_COLORS;
 
   for (let i = 0; i < 3; i++) {
     const heat = new Rectangle();
@@ -168,11 +168,11 @@ export function createTitleScene(
   panel.top = "-5%";
   gui.addControl(panel);
 
-  // Fade-in state
+  // Fade-in state - using centralized timing constants
   let fadeInStarted = false;
   let fadeInAlpha = 0;
-  const fadeInDuration = 1.5; // seconds
-  const fadeInDelay = 0.3; // seconds before fade starts
+  const fadeInDuration = TITLE_FADE_IN_DURATION;
+  const fadeInDelay = TITLE_FADE_IN_DELAY;
 
   // Main title - Bebas Neue for that industrial T2 feel
   const titleLine1 = new TextBlock();
@@ -236,7 +236,7 @@ export function createTitleScene(
 
   const buttonText = new TextBlock();
   buttonText.text = "B E G I N";
-  buttonText.color = "#b89070";
+  buttonText.color = TITLE_TEXT_COLORS.buttonText;
   buttonText.fontFamily = "'Bebas Neue', 'Arial Black', sans-serif";
   buttonText.fontSize = 22;
   playButton.addControl(buttonText);
@@ -252,16 +252,16 @@ export function createTitleScene(
     }, 100);
   });
 
-  // Hover effects
+  // Hover effects - using centralized colors
   playButton.onPointerEnterObservable.add(() => {
     playButton.background = "rgba(100, 50, 25, 0.8)";
-    buttonText.color = "#ffd0a0";
+    buttonText.color = TITLE_TEXT_COLORS.buttonHover;
     playButton.shadowColor = "rgba(255, 120, 50, 0.6)";
     playButton.shadowBlur = 15;
   });
   playButton.onPointerOutObservable.add(() => {
     playButton.background = "rgba(40, 20, 15, 0.6)";
-    buttonText.color = "#b89070";
+    buttonText.color = TITLE_TEXT_COLORS.buttonText;
     playButton.shadowColor = "transparent";
     playButton.shadowBlur = 0;
   });

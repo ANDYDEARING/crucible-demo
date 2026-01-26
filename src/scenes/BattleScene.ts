@@ -19,31 +19,71 @@ import "@babylonjs/loaders/glTF";
 import { AdvancedDynamicTexture, TextBlock, Button, Rectangle, StackPanel, Grid, Control } from "@babylonjs/gui";
 import { type Loadout, type UnitSelection, type UnitCustomization, type UnitClass, getClassData } from "../types";
 
-// Color palettes (same as LoadoutScene)
-const SKIN_TONES = [
-  "#FFDFC4", "#E8C0A0", "#D0A080", "#B08060", "#906040",
-  "#704828", "#503418", "#352210", "#1E1208", "#0A0604",
-];
-const HAIR_COLORS = [
-  "#0A0A0A", "#4A3728", "#E5C8A8", "#B55239", "#C0C0C0",
-  "#FF2222", "#FF66AA", "#9933FF", "#22CC44", "#2288FF",
-];
-const EYE_COLORS = [
-  "#2288FF", "#22AA44", "#634E34", "#DD2222",
-  "#9933FF", "#FFFFFF", "#0A0A0A", "#FF8800",
-];
+// Import centralized config - colors and palettes
+import {
+  SKIN_TONES,
+  HAIR_COLORS,
+  EYE_COLORS,
+  SCENE_BACKGROUNDS,
+  TILE_COLOR_LIGHT,
+  TILE_COLOR_DARK,
+  TERRAIN_COLOR,
+  HIGHLIGHT_SELECTED,
+  HIGHLIGHT_VALID_MOVE,
+  HIGHLIGHT_ATTACKABLE,
+  HIGHLIGHT_HEALABLE,
+  HIGHLIGHT_BLOCKED,
+  HP_BAR_GREEN,
+  HP_BAR_ORANGE,
+  HP_BAR_RED,
+  HP_BAR_BACKGROUND,
+  HP_BAR_BORDER,
+  INTENT_COLOR_ATTACK,
+  INTENT_COLOR_HEAL,
+  INTENT_COLOR_BUFF,
+  DEFAULT_TEAM_COLORS,
+  SHADOW_BASE_ALPHA,
+  SHADOW_UNIT_ALPHA,
+  INTENT_INDICATOR_ALPHA,
+  COVER_ACTIVE_ALPHA,
+  COVER_PREVIEW_ALPHA,
+  CONCEAL_ALPHA,
+  CONCEAL_EMISSIVE_SCALE,
+} from "../config";
 
-// Helper to convert hex color to Color3
-function hexToColor3(hex: string): Color3 {
-  const r = parseInt(hex.slice(1, 3), 16) / 255;
-  const g = parseInt(hex.slice(3, 5), 16) / 255;
-  const b = parseInt(hex.slice(5, 7), 16) / 255;
-  return new Color3(r, g, b);
-}
+// Import centralized config - constants
+import {
+  GRID_SIZE,
+  TILE_SIZE,
+  TILE_GAP,
+  PLAYER1_SPAWN_POSITIONS,
+  PLAYER2_SPAWN_POSITIONS,
+  BATTLE_CAMERA_ALPHA,
+  BATTLE_CAMERA_BETA,
+  BATTLE_CAMERA_RADIUS,
+  BATTLE_CAMERA_LOWER_BETA_LIMIT,
+  BATTLE_CAMERA_UPPER_BETA_LIMIT,
+  BATTLE_CAMERA_LOWER_RADIUS_LIMIT,
+  BATTLE_CAMERA_UPPER_RADIUS_LIMIT,
+  MOVEMENT_DURATION_PER_TILE,
+  ATTACK_IMPACT_DELAY_MS,
+  ACTIONS_PER_TURN,
+  ACCUMULATOR_THRESHOLD,
+  SPEED_BONUS_PER_UNUSED_ACTION,
+  MELEE_DAMAGE_MULTIPLIER,
+  HP_LOW_THRESHOLD,
+  HP_MEDIUM_THRESHOLD,
+  BATTLE_MODEL_SCALE,
+  BATTLE_MODEL_Y_POSITION,
+  HP_BAR_ANCHOR_HEIGHT,
+  HEAD_VARIANT_COUNT,
+} from "../config";
 
-const GRID_SIZE = 8;
-const TILE_SIZE = 1;
-const TILE_GAP = 0.05;
+// Import audio config
+import { MUSIC, SFX, AUDIO_VOLUMES, LOOP_BUFFER_TIME } from "../config";
+
+// Import utility functions
+import { hexToColor3, createMusicPlayer, playSfx, rgbToColor3 } from "../utils";
 
 type Team = "player1" | "player2";
 type ActionMode = "none" | "move" | "attack" | "ability";
@@ -111,17 +151,13 @@ interface Unit {
 
 export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, loadout: Loadout | null): Scene {
   const scene = new Scene(engine);
-  scene.clearColor.set(0.1, 0.1, 0.15, 1);
+  // Use centralized scene background color
+  const bg = SCENE_BACKGROUNDS.battle;
+  scene.clearColor.set(bg.r, bg.g, bg.b, bg.a);
 
   // Battle music - Placeholder
-  const music = new Audio("/audio/battle_v2.m4a");
-  music.loop = true;
-  music.volume = 0.5;
-  music.addEventListener("timeupdate", () => {
-    if (music.duration && music.currentTime >= music.duration - 0.5) {
-      music.currentTime = 0;
-    }
-  });
+  // Background music - using centralized audio config
+  const music = createMusicPlayer(MUSIC.battle, AUDIO_VOLUMES.music, true, LOOP_BUFFER_TIME);
   music.play();
 
   scene.onDisposeObservable.add(() => {
@@ -130,56 +166,56 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
   });
 
   // Sound effects
+  // Sound effects - using centralized audio paths and volumes
   const sfx = {
-    hitLight: new Audio("/audio/effects/hit-light.flac"),
-    hitMedium: new Audio("/audio/effects/hit-medium.flac"),
-    hitHeavy: new Audio("/audio/effects/hit-heavy.flac"),
-    heal: new Audio("/audio/effects/Cure1.wav"),
+    hitLight: new Audio(SFX.hitLight),
+    hitMedium: new Audio(SFX.hitMedium),
+    hitHeavy: new Audio(SFX.hitHeavy),
+    heal: new Audio(SFX.heal),
   };
-  // Set volume for sound effects
-  Object.values(sfx).forEach(sound => sound.volume = 0.6);
+  // Set volume for all sound effects
+  Object.values(sfx).forEach(sound => sound.volume = AUDIO_VOLUMES.sfx);
+  // Note: playSfx is now imported from utils
 
-  function playSfx(sound: HTMLAudioElement): void {
-    sound.currentTime = 0;
-    sound.play();
-  }
-
+  // Camera - using centralized constants for isometric tactical view
   const camera = new ArcRotateCamera(
     "camera",
-    Math.PI / 4,
-    Math.PI / 3,
-    12,
+    BATTLE_CAMERA_ALPHA,
+    BATTLE_CAMERA_BETA,
+    BATTLE_CAMERA_RADIUS,
     new Vector3(0, 0, 0),
     scene
   );
   camera.attachControl(true);
-  camera.lowerBetaLimit = 0.3;
-  camera.upperBetaLimit = Math.PI / 2.2;
-  camera.lowerRadiusLimit = 8;
-  camera.upperRadiusLimit = 20;
+  camera.lowerBetaLimit = BATTLE_CAMERA_LOWER_BETA_LIMIT;
+  camera.upperBetaLimit = BATTLE_CAMERA_UPPER_BETA_LIMIT;
+  camera.lowerRadiusLimit = BATTLE_CAMERA_LOWER_RADIUS_LIMIT;
+  camera.upperRadiusLimit = BATTLE_CAMERA_UPPER_RADIUS_LIMIT;
 
   new HemisphericLight("ambientLight", new Vector3(0, 1, 0), scene);
   const dirLight = new DirectionalLight("dirLight", new Vector3(-1, -2, -1), scene);
   dirLight.intensity = 0.5;
 
   // Tile materials
+  // Tile materials - using centralized color config
   const tileMaterialLight = new StandardMaterial("tileLightMat", scene);
-  tileMaterialLight.diffuseColor = new Color3(0.18, 0.22, 0.17);
+  tileMaterialLight.diffuseColor = rgbToColor3(TILE_COLOR_LIGHT);
 
   const tileMaterialDark = new StandardMaterial("tileDarkMat", scene);
-  tileMaterialDark.diffuseColor = new Color3(0.12, 0.15, 0.11);
+  tileMaterialDark.diffuseColor = rgbToColor3(TILE_COLOR_DARK);
 
+  // Highlight materials - using centralized color config
   const selectedMaterial = new StandardMaterial("selectedMat", scene);
-  selectedMaterial.diffuseColor = new Color3(0.8, 0.8, 0.2);
+  selectedMaterial.diffuseColor = rgbToColor3(HIGHLIGHT_SELECTED);
 
   const validMoveMaterial = new StandardMaterial("validMoveMat", scene);
-  validMoveMaterial.diffuseColor = new Color3(0.3, 0.6, 0.9);
+  validMoveMaterial.diffuseColor = rgbToColor3(HIGHLIGHT_VALID_MOVE);
 
   const attackableMaterial = new StandardMaterial("attackableMat", scene);
-  attackableMaterial.diffuseColor = new Color3(0.9, 0.3, 0.3);
+  attackableMaterial.diffuseColor = rgbToColor3(HIGHLIGHT_ATTACKABLE);
 
   const healableMaterial = new StandardMaterial("healableMat", scene);
-  healableMaterial.diffuseColor = new Color3(0.3, 0.9, 0.5);
+  healableMaterial.diffuseColor = rgbToColor3(HIGHLIGHT_HEALABLE);
 
   const unitMaterials: Record<UnitClass, StandardMaterial> = {
     soldier: createUnitMaterial("soldier", new Color3(0.3, 0.3, 0.8), scene),
@@ -381,8 +417,9 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
   const terrainPositions = generateTerrainPositions();
 
   // Create terrain cube meshes
+  // Terrain material - using centralized color config
   const terrainMaterial = new StandardMaterial("terrainMat", scene);
-  terrainMaterial.diffuseColor = new Color3(0.4, 0.35, 0.3);
+  terrainMaterial.diffuseColor = rgbToColor3(TERRAIN_COLOR);
   terrainMaterial.specularColor = new Color3(0.1, 0.1, 0.1);
 
   const tileTopY = 0.05;  // Top surface of tiles (tiles are height 0.1 centered at Y=0)
@@ -780,8 +817,9 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
   }
 
   // LOS-blocked material (gray for blocked targets)
+  // Blocked tile material (no LOS) - using centralized color config
   const blockedMaterial = new StandardMaterial("blockedMat", scene);
-  blockedMaterial.diffuseColor = new Color3(0.4, 0.4, 0.4);
+  blockedMaterial.diffuseColor = rgbToColor3(HIGHLIGHT_BLOCKED);
 
   // Export references for future use (prevents unused warnings)
   const _helpers = { getTilesInLOS, getValidAttackTiles, createShadowPreview, clearShadowPreview, shadowPosition: () => shadowPosition, highlightAttackTargets, getAttackableEnemiesWithLOS, showAttackPreview, clearAttackPreview, highlightHealTargets, toggleConceal, toggleCover, clearCoverVisualization };
@@ -830,7 +868,7 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
     playAnimation(unit, "Run", true);
 
     let currentWaypointIndex = 0;
-    const durationPerTile = 0.3; // seconds per tile
+    const durationPerTile = MOVEMENT_DURATION_PER_TILE;
     let segmentElapsed = 0;
 
     // Set initial facing toward first waypoint (from start position)
@@ -912,7 +950,7 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
     );
     const shadowBaseMat = new StandardMaterial("shadowBaseMat", scene);
     shadowBaseMat.diffuseColor = unit.teamColor;
-    shadowBaseMat.alpha = 0.4;
+    shadowBaseMat.alpha = SHADOW_BASE_ALPHA;
     shadowBaseMesh.material = shadowBaseMat;
     shadowBaseMesh.position = new Vector3(
       targetX * TILE_SIZE - gridOffset,
@@ -928,7 +966,7 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
     );
     const shadowMat = new StandardMaterial("shadowMat", scene);
     shadowMat.diffuseColor = unit.teamColor;
-    shadowMat.alpha = 0.3;
+    shadowMat.alpha = SHADOW_UNIT_ALPHA;
     shadowMesh.material = shadowMat;
     shadowMesh.position = new Vector3(
       targetX * TILE_SIZE - gridOffset,
@@ -965,7 +1003,7 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
     const indicatorMat = new StandardMaterial("intentMat", scene);
     indicatorMat.diffuseColor = color;
     indicatorMat.emissiveColor = color.scale(0.3);  // Slight glow effect
-    indicatorMat.alpha = 0.5;
+    indicatorMat.alpha = INTENT_INDICATOR_ALPHA;
     indicator.material = indicatorMat;
     indicator.position = new Vector3(
       targetX * TILE_SIZE - gridOffset,
@@ -1002,32 +1040,32 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
 
     for (const action of turnState.pendingActions) {
       if (action.type === "attack" && action.targetUnit) {
-        // Red indicator for attack
+        // Attack indicator - using centralized color
         const stackIndex = getStackIndex(action.targetUnit.gridX, action.targetUnit.gridZ);
         const indicator = createIntentIndicator(
           action.targetUnit.gridX,
           action.targetUnit.gridZ,
-          new Color3(0.9, 0.2, 0.2),  // Red
+          rgbToColor3(INTENT_COLOR_ATTACK),
           stackIndex
         );
         intentIndicators.push(indicator);
       } else if (action.type === "ability" && action.abilityName === "heal" && action.targetUnit) {
-        // Green indicator for heal/support
+        // Heal indicator - using centralized color
         const stackIndex = getStackIndex(action.targetUnit.gridX, action.targetUnit.gridZ);
         const indicator = createIntentIndicator(
           action.targetUnit.gridX,
           action.targetUnit.gridZ,
-          new Color3(0.2, 0.9, 0.3),  // Green
+          rgbToColor3(INTENT_COLOR_HEAL),
           stackIndex
         );
         intentIndicators.push(indicator);
       } else if (action.type === "ability" && (action.abilityName === "conceal" || action.abilityName === "cover") && action.targetUnit) {
-        // Blue indicator for self-buff abilities
+        // Self-buff indicator - using centralized color
         const stackIndex = getStackIndex(action.targetUnit.gridX, action.targetUnit.gridZ);
         const indicator = createIntentIndicator(
           action.targetUnit.gridX,
           action.targetUnit.gridZ,
-          new Color3(0.2, 0.5, 0.9),  // Blue
+          rgbToColor3(INTENT_COLOR_BUFF),
           stackIndex
         );
         intentIndicators.push(indicator);
@@ -1035,30 +1073,22 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
     }
   }
 
-  // Starting positions for each team
-  const player1Positions = [
-    { x: 1, z: 1 },
-    { x: 3, z: 0 },
-    { x: 5, z: 1 },
-  ];
-  const player2Positions = [
-    { x: 6, z: 6 },
-    { x: 4, z: 7 },
-    { x: 2, z: 6 },
-  ];
+  // Starting positions for each team - using centralized constants
+  const player1Positions = [...PLAYER1_SPAWN_POSITIONS];
+  const player2Positions = [...PLAYER2_SPAWN_POSITIONS];
 
   // Use loadout if provided, otherwise default setup
   const defaultUnits: UnitSelection[] = [{ unitClass: "soldier" }, { unitClass: "operator" }, { unitClass: "medic" }];
   const player1Selections = loadout?.player1 ?? defaultUnits;
   const player2Selections = loadout?.player2 ?? defaultUnits;
 
-  // Get team colors from loadout or use defaults
+  // Get team colors from loadout or use centralized defaults
   const player1TeamColor = loadout?.player1TeamColor
     ? hexToColor3(loadout.player1TeamColor)
-    : new Color3(0.2, 0.4, 0.9);  // Default blue
+    : rgbToColor3(DEFAULT_TEAM_COLORS.player1);
   const player2TeamColor = loadout?.player2TeamColor
     ? hexToColor3(loadout.player2TeamColor)
-    : new Color3(0.9, 0.3, 0.2);  // Default red
+    : rgbToColor3(DEFAULT_TEAM_COLORS.player2);
 
   // Spawn units asynchronously
   async function spawnAllUnits(): Promise<void> {
@@ -1129,12 +1159,11 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
   let healableUnits: Unit[] = [];
   let gameOver = false;
 
-  // Initiative system
+  // Initiative system - ACCUMULATOR_THRESHOLD imported from config
   let currentUnit: Unit | null = null;
   let lastActingTeam: Team | null = null;
   let isFirstRound = true;
   let firstRoundQueue: Unit[] = [];
-  const ACCUMULATOR_THRESHOLD = 10;
 
   // Active unit corner indicators
   let cornerMeshes: Mesh[] = [];
@@ -1322,10 +1351,10 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
 
     updateTurnIndicator();
 
-    // Initialize turn state for preview/undo system
+    // Initialize turn state for preview/undo system (using centralized constant)
     turnState = {
       unit,
-      actionsRemaining: 2,
+      actionsRemaining: ACTIONS_PER_TURN,
       pendingActions: [],
       originalPosition: { x: unit.gridX, z: unit.gridZ },
       originalFacing: unit.facing.currentAngle,
@@ -1341,10 +1370,9 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
     const unit = currentUnit;
     if (!unit) return;
 
-    // Calculate speed bonus based on unused actions
-    // Each unused action gives +0.5 speed bonus for next turn
+    // Calculate speed bonus based on unused actions (using centralized constant)
     const unusedActions = turnState?.actionsRemaining ?? 0;
-    unit.speedBonus = unusedActions * 0.25;
+    unit.speedBonus = unusedActions * SPEED_BONUS_PER_UNUSED_ACTION;
 
     // Clear turn state
     turnState = null;
@@ -1526,7 +1554,9 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
     return [{ x: fromX, z: fromZ }, { x: toX, z: toZ }];
   }
 
-  function getAttackableEnemies(unit: Unit, fromX?: number, fromZ?: number): Unit[] {
+  // Legacy function - kept for potential AI/simulation use (simpler than LOS version)
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  function getAttackableEnemiesSimple(unit: Unit, fromX?: number, fromZ?: number): Unit[] {
     if (!hasActionsRemaining()) return []; // No actions remaining
     // Use shadow position if pending move, otherwise use provided or current position
     const effectiveX = fromX ?? shadowPosition?.x ?? unit.gridX;
@@ -1537,6 +1567,8 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
       return distance <= unit.attackRange;
     });
   }
+  // Export for future AI/simulation use
+  void getAttackableEnemiesSimple;
 
   function getHealableAllies(unit: Unit, fromX?: number, fromZ?: number): Unit[] {
     // Only support can heal, needs actions remaining
@@ -1700,14 +1732,14 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
   }
 
   // Helper to apply conceal visual (semi-transparent with team color tint)
+  // Uses centralized alpha and emissive values
   function applyConcealVisual(unit: Unit): void {
     if (unit.modelMeshes) {
       unit.modelMeshes.forEach(mesh => {
         if (mesh.material) {
           const mat = mesh.material as PBRMaterial;
-          mat.alpha = 0.4;
-          // Add team color emissive tint
-          mat.emissiveColor = unit.teamColor.scale(0.4);
+          mat.alpha = CONCEAL_ALPHA;
+          mat.emissiveColor = unit.teamColor.scale(CONCEAL_EMISSIVE_SCALE);
         }
       });
     }
@@ -2010,8 +2042,8 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
 
     const cornerMat = new StandardMaterial(`coverPreviewMat_${tileX}_${tileZ}`, scene);
     cornerMat.diffuseColor = color;
-    cornerMat.emissiveColor = color.scale(0.2);
-    cornerMat.alpha = 0.2;  // More transparent for preview
+    cornerMat.emissiveColor = color.scale(COVER_PREVIEW_ALPHA);
+    cornerMat.alpha = COVER_PREVIEW_ALPHA;  // More transparent for preview
 
     // Create L-shaped corner markers at each corner
     const corners = [
@@ -2149,8 +2181,8 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
 
     const cornerMat = new StandardMaterial(`coverCornerMat_${unit.team}_${tileX}_${tileZ}`, scene);
     cornerMat.diffuseColor = color;
-    cornerMat.emissiveColor = color.scale(0.4);
-    cornerMat.alpha = 0.4;
+    cornerMat.emissiveColor = color.scale(COVER_ACTIVE_ALPHA);
+    cornerMat.alpha = COVER_ACTIVE_ALPHA;
 
     // Get or create mesh array for this unit
     if (!coverMeshesByUnit.has(unit)) {
@@ -2326,13 +2358,13 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
     if (unit.hpBar) {
       const hpPercent = Math.max(0, unit.hp / unit.maxHp);
       unit.hpBar.width = `${30 * hpPercent}px`;
-      // Always update color based on current HP percentage
-      if (hpPercent < 0.3) {
-        unit.hpBar.background = "#ff4444";
-      } else if (hpPercent < 0.6) {
-        unit.hpBar.background = "#ffaa44";
+      // Update color based on HP percentage - using centralized thresholds and colors
+      if (hpPercent < HP_LOW_THRESHOLD) {
+        unit.hpBar.background = HP_BAR_RED;
+      } else if (hpPercent < HP_MEDIUM_THRESHOLD) {
+        unit.hpBar.background = HP_BAR_ORANGE;
       } else {
-        unit.hpBar.background = "#44ff44";  // Green when healthy
+        unit.hpBar.background = HP_BAR_GREEN;
       }
     }
   }
@@ -2696,9 +2728,9 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
         return;
       }
 
-      // Apply damage (melee does 2x damage)
+      // Apply damage (melee does more damage - using centralized multiplier)
       const isMeleeAttack = attacker.customization?.combatStyle === "melee";
-      const damage = isMeleeAttack ? attacker.attack * 2 : attacker.attack;
+      const damage = isMeleeAttack ? attacker.attack * MELEE_DAMAGE_MULTIPLIER : attacker.attack;
       defender.hp -= damage;
       console.log(`${attacker.team} ${attacker.unitClass} attacks ${defender.team} ${defender.unitClass} for ${damage} damage! (${defender.hp}/${defender.maxHp} HP)`);
 
@@ -2738,7 +2770,7 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
           onComplete();
         });
       }
-    }, 300); // 300ms delay for attack animation to reach impact
+    }, ATTACK_IMPACT_DELAY_MS); // Delay for attack animation to reach impact
   }
 
   // Execute heal (called during execution phase)
@@ -3282,9 +3314,9 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
       attackBtn.textBlock.text = isMelee ? "Strike" : "Shoot";
     }
 
-    // Update actions text from turnState
+    // Update actions text from turnState (using centralized constant)
     const remaining = turnState?.actionsRemaining ?? 0;
-    menuActionsText.text = `Actions: ${remaining}/2`;
+    menuActionsText.text = `Actions: ${remaining}/${ACTIONS_PER_TURN}`;
 
     // Update preview section
     updateMenuPreview();
@@ -3396,22 +3428,21 @@ async function createUnit(
   // Hide model initially until facing is set (prevents wrong-direction flash)
   modelRoot.setEnabled(false);
 
-  // Position and scale the model
-  const modelScale = 0.5;
+  // Position and scale the model - using centralized constants
   modelRoot.position = new Vector3(
     gridX * TILE_SIZE - gridOffset,
-    0.05,  // Lowered since base disc was removed
+    BATTLE_MODEL_Y_POSITION,
     gridZ * TILE_SIZE - gridOffset
   );
   modelRoot.scaling = new Vector3(
-    c.handedness === "right" ? -modelScale : modelScale,
-    modelScale,
-    modelScale
+    c.handedness === "right" ? -BATTLE_MODEL_SCALE : BATTLE_MODEL_SCALE,
+    BATTLE_MODEL_SCALE,
+    BATTLE_MODEL_SCALE
   );
 
   // Apply customizations to the model
-  // Head visibility
-  for (let i = 0; i < 4; i++) {
+  // Head visibility (using centralized constant)
+  for (let i = 0; i < HEAD_VARIANT_COUNT; i++) {
     const headName = `Head_00${i + 1}`;
     const headMeshes = modelMeshes.filter(m => m.name.includes(headName));
     headMeshes.forEach(mesh => mesh.setEnabled(i === c.head));
@@ -3457,29 +3488,29 @@ async function createUnit(
   const hpBarAnchor = MeshBuilder.CreateBox(`${team}_${unitClass}_anchor_${gridX}_${gridZ}`, { size: 0.01 }, scene);
   hpBarAnchor.position = new Vector3(
     gridX * TILE_SIZE - gridOffset,
-    1.2,  // Approximate head height
+    HP_BAR_ANCHOR_HEIGHT,
     gridZ * TILE_SIZE - gridOffset
   );
   hpBarAnchor.isVisible = false;
   hpBarAnchor.metadata = { type: "unit", unitClass, team };
 
-  // HP bar background
+  // HP bar background - using centralized colors
   const hpBarBg = new Rectangle();
   hpBarBg.width = "34px";
   hpBarBg.height = "6px";
-  hpBarBg.background = "#333333";
+  hpBarBg.background = HP_BAR_BACKGROUND;
   hpBarBg.thickness = 1;
-  hpBarBg.color = "#000000";
+  hpBarBg.color = HP_BAR_BORDER;
   hpBarBg.isVisible = false;  // Hide until model is ready
   gui.addControl(hpBarBg);
   hpBarBg.linkWithMesh(hpBarAnchor);
   hpBarBg.linkOffsetY = -50;
 
-  // HP bar fill
+  // HP bar fill - using centralized colors
   const hpBar = new Rectangle();
   hpBar.width = "30px";
   hpBar.height = "4px";
-  hpBar.background = "#44ff44";
+  hpBar.background = HP_BAR_GREEN;
   hpBar.horizontalAlignment = Rectangle.HORIZONTAL_ALIGNMENT_LEFT;
   hpBar.left = "2px";
   hpBarBg.addControl(hpBar);
@@ -3529,11 +3560,11 @@ function moveUnit(unit: Unit, newX: number, newZ: number, gridOffset: number): v
   const newPosX = newX * TILE_SIZE - gridOffset;
   const newPosZ = newZ * TILE_SIZE - gridOffset;
 
-  // Move HP bar anchor
-  unit.mesh.position = new Vector3(newPosX, 1.2, newPosZ);
+  // Move HP bar anchor (using centralized height constant)
+  unit.mesh.position = new Vector3(newPosX, HP_BAR_ANCHOR_HEIGHT, newPosZ);
 
-  // Move 3D model
+  // Move 3D model (using centralized Y position constant)
   if (unit.modelRoot) {
-    unit.modelRoot.position = new Vector3(newPosX, 0.05, newPosZ);
+    unit.modelRoot.position = new Vector3(newPosX, BATTLE_MODEL_Y_POSITION, newPosZ);
   }
 }
