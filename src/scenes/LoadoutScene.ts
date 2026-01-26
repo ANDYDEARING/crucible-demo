@@ -395,10 +395,10 @@ export function createLoadoutScene(
 
   // Create player panels - show "Computer" label for AI-controlled team in PvE
   const player1Name = gameMode === "local-pve" && humanTeam !== "player1"
-    ? "Computer (Medium)"
+    ? "Computer"
     : "Player 1";
   const player2Name = gameMode === "local-pve" && humanTeam !== "player2"
-    ? "Computer (Medium)"
+    ? "Computer"
     : "Player 2";
 
   const player1Panel = createPlayerPanel(player1Name, "#4488ff", selections.player1, "left");

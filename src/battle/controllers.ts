@@ -210,6 +210,15 @@ export class AIController implements Controller {
       return killOpportunity;
     }
 
+    // === GENERAL OVERRIDE: Ranged unit with no targets - back up to get a shot ===
+    // This applies to ALL ranged units (including medics) when enemies are adjacent
+    if (!isMelee && enemies.length === 0 && allEnemies.length > 0 && moveTiles.length > 0) {
+      const backupMove = this.findBackupPositionForRanged(state, unit, moveTiles, allEnemies);
+      if (backupMove) {
+        return { type: "move", targetX: backupMove.x, targetZ: backupMove.z };
+      }
+    }
+
     // === CLASS-SPECIFIC BEHAVIOR ===
     switch (unit.unitClass) {
       case "operator":
@@ -518,6 +527,38 @@ export class AIController implements Controller {
 
     if (bestDistance >= currentMinDistance) {
       return null;
+    }
+
+    return bestMove;
+  }
+
+  private findBackupPositionForRanged(
+    state: BattleState,
+    unit: UnitState,
+    moveTiles: { x: number; z: number }[],
+    _enemies: UnitState[]
+  ): { x: number; z: number } | null {
+    // Ranged units can't hit adjacent tiles, so if enemies are too close,
+    // find a position to back up to where we can get a shot
+
+    let bestMove: { x: number; z: number } | null = null;
+    let bestScore = 0;
+
+    for (const tile of moveTiles) {
+      // Check what we can attack from this position
+      const simulatedUnit = { ...unit, gridX: tile.x, gridZ: tile.z };
+      const attackableFromTile = getAttackableEnemies(state, simulatedUnit);
+
+      if (attackableFromTile.length > 0) {
+        // Score based on number of targets and preferring closer positions
+        const distFromCurrent = Math.abs(tile.x - unit.gridX) + Math.abs(tile.z - unit.gridZ);
+        const score = attackableFromTile.length * 10 - distFromCurrent;
+
+        if (score > bestScore) {
+          bestScore = score;
+          bestMove = tile;
+        }
+      }
     }
 
     return bestMove;

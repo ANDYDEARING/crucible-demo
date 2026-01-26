@@ -1154,6 +1154,7 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
       0.1,
       targetZ * TILE_SIZE - gridOffset
     );
+    shadowBaseMesh.isPickable = false; // Allow clicks to pass through
 
     // Create shadow silhouette (simple cylinder for now)
     shadowMesh = MeshBuilder.CreateCylinder(
@@ -1170,6 +1171,7 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
       0.6,
       targetZ * TILE_SIZE - gridOffset
     );
+    shadowMesh.isPickable = false; // Allow clicks to pass through
   }
 
   function clearShadowPreview(): void {

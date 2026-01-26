@@ -216,8 +216,8 @@ export function getTilesInLOS(
       if (x === fromX && z === fromZ) continue;
       if (hasTerrain(state, x, z)) continue;
 
-      const distance = Math.abs(x - fromX) + Math.abs(z - fromZ);
-      if (excludeAdjacent && distance === 1) continue;
+      // Exclude all 8 adjacent tiles (including diagonals) for ranged weapons
+      if (excludeAdjacent && isAdjacent(fromX, fromZ, x, z)) continue;
 
       if (hasLineOfSight(state, fromX, fromZ, x, z, excludeUnitId)) {
         result.push({ x, z });
