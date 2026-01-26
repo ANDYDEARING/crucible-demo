@@ -186,39 +186,70 @@ export class AIController implements Controller {
   private chooseBestAction(
     state: BattleState,
     unit: UnitState,
-    _actionsUsed: number
+    actionsUsed: number
   ): BattleCommand | null {
-    // Get available targets from current position
     const enemies = getAttackableEnemies(state, unit);
     const healTargets = getHealableAllies(state, unit);
     const moveTiles = getValidMoveTiles(state, unit);
+    const enemyTeam = unit.team === "player1" ? "player2" : "player1";
+    const allEnemies = state.units.filter(u => u.team === enemyTeam && u.hp > 0);
+    const allAllies = state.units.filter(u => u.team === unit.team && u.hp > 0 && u.id !== unit.id);
+    const isMelee = unit.combatStyle === "melee";
+    const isMedic = unit.unitClass === "medic";
 
-    // Priority 1: Attack if enemy in range
+    // === MEDIC SPECIAL BEHAVIOR ===
+    if (isMedic) {
+      // Medics prioritize safety and healing
+
+      // If can kill an enemy in one hit, take the shot
+      const oneHitKills = enemies.filter(e => e.hp <= unit.attack);
+      if (oneHitKills.length > 0) {
+        const target = this.selectAttackTarget(oneHitKills);
+        return { type: "attack", targetUnitId: target.id };
+      }
+
+      // If allies need healing, heal them
+      if (healTargets.length > 0) {
+        const target = this.selectHealTarget(healTargets);
+        return { type: "heal", targetUnitId: target.id };
+      }
+
+      // If no allies left, fight
+      if (allAllies.length === 0 && enemies.length > 0) {
+        const target = this.selectAttackTarget(enemies);
+        return { type: "attack", targetUnitId: target.id };
+      }
+
+      // Otherwise stay put (don't advance toward enemies)
+      return null;
+    }
+
+    // === COMBAT UNITS (Soldier/Operator) ===
+
+    // If we can attack, do it
     if (enemies.length > 0) {
       const target = this.selectAttackTarget(enemies);
       return { type: "attack", targetUnitId: target.id };
     }
 
-    // Priority 2: Heal if ally needs it and we can heal
-    if (unit.healAmount > 0 && healTargets.length > 0) {
-      const target = this.selectHealTarget(healTargets);
-      return { type: "heal", targetUnitId: target.id };
-    }
-
-    // Priority 3: Move toward nearest enemy
-    if (moveTiles.length > 0) {
-      const enemyTeam = unit.team === "player1" ? "player2" : "player1";
-      const enemyUnits = state.units.filter(u => u.team === enemyTeam && u.hp > 0);
-
-      if (enemyUnits.length > 0) {
-        const bestMove = this.selectMoveTowardEnemy(unit, moveTiles, enemyUnits);
-        if (bestMove) {
-          return { type: "move", targetX: bestMove.x, targetZ: bestMove.z };
-        }
+    // Melee units: move to close distance if no enemies in range
+    if (isMelee && moveTiles.length > 0 && allEnemies.length > 0) {
+      const bestMove = this.selectMoveTowardEnemy(unit, moveTiles, allEnemies, true);
+      if (bestMove) {
+        return { type: "move", targetX: bestMove.x, targetZ: bestMove.z };
       }
     }
 
-    // Priority 4: Use ability (conceal/cover) if available
+    // Ranged units: move to get better position/LOS
+    if (!isMelee && moveTiles.length > 0 && allEnemies.length > 0 && actionsUsed === 0) {
+      // Only move on first action to avoid wasting both actions on movement
+      const bestMove = this.selectMoveForRanged(state, unit, moveTiles, allEnemies);
+      if (bestMove) {
+        return { type: "move", targetX: bestMove.x, targetZ: bestMove.z };
+      }
+    }
+
+    // Use ability if nothing else to do
     if (unit.unitClass === "operator" && !unit.isConcealed) {
       return { type: "conceal" };
     }
@@ -251,7 +282,8 @@ export class AIController implements Controller {
   private selectMoveTowardEnemy(
     unit: UnitState,
     moveTiles: { x: number; z: number }[],
-    enemies: UnitState[]
+    enemies: UnitState[],
+    alwaysMove: boolean = false
   ): { x: number; z: number } | null {
     // Find move that gets closest to any enemy
     let bestMove: { x: number; z: number } | null = null;
@@ -267,17 +299,59 @@ export class AIController implements Controller {
       }
     }
 
-    // Don't move if we're already adjacent to an enemy
+    // Check current minimum distance to any enemy
     const currentMinDistance = enemies.reduce((min, e) => {
       const d = Math.abs(unit.gridX - e.gridX) + Math.abs(unit.gridZ - e.gridZ);
       return Math.min(min, d);
     }, Infinity);
 
-    if (bestDistance >= currentMinDistance) {
+    // For melee units (alwaysMove=true), always move if it helps
+    // For ranged units, only move if it significantly improves position
+    if (!alwaysMove && bestDistance >= currentMinDistance) {
       return null; // Moving doesn't help
     }
 
+    // Don't return a move if it doesn't improve distance
+    if (bestDistance >= currentMinDistance) {
+      return null;
+    }
+
     return bestMove;
+  }
+
+  private selectMoveForRanged(
+    state: BattleState,
+    unit: UnitState,
+    moveTiles: { x: number; z: number }[],
+    _enemies: UnitState[]
+  ): { x: number; z: number } | null {
+    // For ranged units, find a tile that gives us attackable enemies
+    // Prefer tiles where we can hit enemies we couldn't hit before
+
+    let bestMove: { x: number; z: number } | null = null;
+    let bestScore = 0;
+
+    for (const tile of moveTiles) {
+      // Simulate being at this tile and check what we can attack
+      const simulatedUnit = { ...unit, gridX: tile.x, gridZ: tile.z };
+      const attackableFromTile = getAttackableEnemies(state, simulatedUnit);
+
+      // Score based on number of targets and their HP (prefer finishing low HP)
+      let score = attackableFromTile.length;
+      for (const target of attackableFromTile) {
+        if (target.hp <= unit.attack) {
+          score += 2; // Bonus for potential kills
+        }
+      }
+
+      if (score > bestScore) {
+        bestScore = score;
+        bestMove = tile;
+      }
+    }
+
+    // Only move if we can attack from the new position
+    return bestScore > 0 ? bestMove : null;
   }
 }
 

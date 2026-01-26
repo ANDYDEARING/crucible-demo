@@ -22,8 +22,8 @@ export function setGameMode(mode: GameMode, humanTeam?: "player1" | "player2"): 
   if (humanTeam) {
     currentHumanTeam = humanTeam;
   } else if (mode === "local-pve") {
-    // Random team for PvE
-    currentHumanTeam = Math.random() < 0.5 ? "player1" : "player2";
+    // Player 1 is always human in PvE, Player 2 is computer
+    currentHumanTeam = "player1";
   }
 }
 

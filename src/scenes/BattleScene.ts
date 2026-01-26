@@ -564,18 +564,35 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
       issueCommand(command: BattleCommand): boolean {
         if (!turnState || turnState.actionsRemaining <= 0) return false;
 
+        // Get pending move position (if unit has a queued move, use that position)
+        let fromX = unit.gridX;
+        let fromZ = unit.gridZ;
+        for (const action of turnState.pendingActions) {
+          if (action.type === "move" && action.targetX !== undefined && action.targetZ !== undefined) {
+            fromX = action.targetX;
+            fromZ = action.targetZ;
+          }
+        }
+
         // Route command to appropriate queue function
         switch (command.type) {
-          case "move":
-            if (isValidMove(command.targetX, command.targetZ)) {
+          case "move": {
+            // Validate from pending position (works for both human UI and AI)
+            const validMoves = getValidMoveTiles(unit, fromX, fromZ);
+            const isValid = validMoves.some(t => t.x === command.targetX && t.z === command.targetZ);
+            if (isValid) {
               queueMoveAction(unit, command.targetX, command.targetZ);
               return true;
             }
             return false;
+          }
 
           case "attack": {
             const target = findUnitById(command.targetUnitId);
-            if (target && attackableUnits.includes(target)) {
+            if (!target) return false;
+            // Validate from pending position (works for both human UI and AI)
+            const validTargets = getAttackableEnemiesWithLOS(unit, fromX, fromZ);
+            if (validTargets.includes(target)) {
               queueAttackAction(unit, target);
               return true;
             }
@@ -584,7 +601,10 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
 
           case "heal": {
             const target = findUnitById(command.targetUnitId);
-            if (target && healableUnits.includes(target)) {
+            if (!target) return false;
+            // Validate from pending position (works for both human UI and AI)
+            const validTargets = getHealableAllies(unit, fromX, fromZ);
+            if (validTargets.includes(target)) {
               queueHealAction(unit, target);
               return true;
             }
