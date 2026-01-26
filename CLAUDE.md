@@ -53,6 +53,25 @@ When implementing features:
 
 ## Conversation Log
 
+### 2026-01-26
+- Game mode selection and AI improvements
+  - **Title screen mode selection**: Added "Local PvP" and "Local PvE" buttons to TitleScene
+  - **AI Controller**: Rewrote AI behavior with class-specific logic:
+    - Melee Operatives: Close distance, then strike
+    - Ranged Operatives: Shoot twice, or move+shoot, or reposition
+    - Soldiers: Use Cover if no target available after moving
+    - Operators: Activate Conceal first turn, then act normally
+    - Medics: Prioritize healing injured allies, position behind teammates when idle
+    - General overrides: Prioritize kill opportunities (2 actions), ranged units back up when enemies adjacent
+  - **Fixed diagonal adjacency bugs**: Both `rules.ts` and `BattleScene.ts` now use `isAdjacent()` function for proper cardinal-only checks (ranged weapons exclude adjacent tiles, melee covers cardinal only)
+  - **Shadow preview click-through**: Made shadow mesh non-pickable so clicks pass through to tiles (fixes medic self-heal with pending move)
+  - **UI improvements**:
+    - Hide command menu for AI-controlled units
+    - "Computer" label in LoadoutScene for PvE mode
+  - **Active unit tile highlighting**: Yellow highlight now persists on active unit's tile throughout their turn
+  - **Undo fix**: Tile highlights now properly restore after undoing an action based on current action mode
+  - **Game over check**: AI stops acting when win condition is met
+
 ### 2026-01-24
 - Major BattleScene refactor: animations, LOS, command menu, and abilities
   - **Facing system**: Units face average enemy position on spawn; rotate to face targets before moving/attacking

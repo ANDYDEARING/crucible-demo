@@ -1565,6 +1565,9 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
       onTurnStartCallback(unit);
     }
 
+    // Highlight the active unit's tile yellow
+    highlightActiveUnitTile();
+
     // Notify controller that turn has started
     // This allows AI/network controllers to take over
     const context = createControllerContext(unit);
@@ -1596,9 +1599,9 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
     controllerManager.notifyTurnEnd(unit.team);
 
     lastActingTeam = unit.team;
-    clearHighlights();
     selectedUnit = null;
     currentUnit = null;
+    clearHighlights();
 
     const nextUnit = getNextUnit();
     if (nextUnit) {
@@ -1628,6 +1631,26 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
     highlightedTiles = [];
     attackableUnits = [];
     healableUnits = [];
+
+    // Always keep the active unit's tile highlighted yellow
+    highlightActiveUnitTile();
+  }
+
+  // Highlight just the active unit's current tile (or shadow position) yellow
+  function highlightActiveUnitTile(): void {
+    if (!currentUnit) return;
+
+    // Use shadow position if there's a pending move, otherwise current position
+    const effectiveX = shadowPosition?.x ?? currentUnit.gridX;
+    const effectiveZ = shadowPosition?.z ?? currentUnit.gridZ;
+
+    const tile = tiles[effectiveX][effectiveZ];
+    tile.material = selectedMaterial;
+
+    // Track it so it can be cleared properly later
+    if (!highlightedTiles.includes(tile)) {
+      highlightedTiles.push(tile);
+    }
   }
 
   function hasActionsRemaining(): boolean {
@@ -3275,6 +3298,28 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
     updateIntentIndicators();
 
     updateCommandMenu();
+
+    // Restore highlights based on current action mode
+    if (selectedUnit && currentUnit) {
+      const effectiveX = shadowPosition?.x ?? currentUnit.gridX;
+      const effectiveZ = shadowPosition?.z ?? currentUnit.gridZ;
+
+      switch (currentActionMode) {
+        case "move":
+          highlightValidActions(selectedUnit);
+          break;
+        case "attack":
+          highlightAttackTargets(selectedUnit, effectiveX, effectiveZ);
+          break;
+        case "ability":
+          highlightHealTargets(selectedUnit, effectiveX, effectiveZ);
+          break;
+        default:
+          // No specific mode, just ensure active tile is highlighted
+          clearHighlights();
+          break;
+      }
+    }
   }
 
   // Click handling
