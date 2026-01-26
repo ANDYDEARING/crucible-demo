@@ -928,10 +928,8 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
         // Skip terrain tiles (no unit can stand there)
         if (hasTerrain(x, z)) continue;
 
-        const distance = Math.abs(x - fromX) + Math.abs(z - fromZ);
-
-        // If excluding adjacent (for guns), skip distance 1
-        if (excludeAdjacent && distance === 1) continue;
+        // If excluding adjacent (for guns), skip all 8 adjacent tiles including diagonals
+        if (excludeAdjacent && isAdjacent(fromX, fromZ, x, z)) continue;
 
         if (hasLineOfSight(fromX, fromZ, x, z, excludeUnit)) {
           result.push({ x, z });
