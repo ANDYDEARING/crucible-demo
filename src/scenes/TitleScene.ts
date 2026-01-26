@@ -65,6 +65,31 @@ export function createTitleScene(
 
   const gui = AdvancedDynamicTexture.CreateFullscreenUI("UI");
 
+  // === RESPONSIVE SIZING ===
+  // Breakpoints: mobile (<600), tablet (600-1024), desktop (>1024)
+  const screenWidth = engine.getRenderWidth();
+  const isTablet = screenWidth >= 600 && screenWidth < 1024;
+  const isDesktop = screenWidth >= 1024;
+
+  // Scale factors based on screen size (mobile = 1.0 baseline)
+  // Titles scale more aggressively, buttons stay modest
+  const titleScale = isDesktop ? 2.2 : isTablet ? 1.7 : 1.0;
+  const buttonScale = isDesktop ? 1.3 : isTablet ? 1.15 : 1.0;
+  const buttonWidthPercent = isDesktop ? "30%" : isTablet ? "45%" : "70%";
+  const dividerWidthPercent = isDesktop ? "30%" : isTablet ? "45%" : "70%";
+
+  // Font sizes
+  const subtitleFontSize = Math.round(24 * titleScale);
+  const mainTitleFontSize = Math.round(64 * titleScale);
+  const buttonFontSize = Math.round(18 * buttonScale);
+
+  // Heights
+  const subtitleHeight = `${Math.round(35 * titleScale)}px`;
+  const mainTitleHeight = `${Math.round(75 * titleScale)}px`;
+  const buttonHeight = `${Math.round(50 * buttonScale)}px`;
+  const spacerHeight = `${Math.round(40 * titleScale)}px`;
+  const buttonSpacerHeight = `${Math.round(15 * buttonScale)}px`;
+
   // === BACKGROUND: Rising heat glow from below ===
 
   // Base gradient - warm glow rising from bottom (full height, gradient handles fade)
@@ -187,11 +212,11 @@ export function createTitleScene(
   titleLine1.color = "rgba(232, 196, 160, 0)"; // Start invisible
   titleLine1.fontFamily = "'Bebas Neue', 'Arial Black', sans-serif";
   titleLine1.fontWeight = "400";
-  titleLine1.fontSize = 24;
-  titleLine1.height = "35px";
+  titleLine1.fontSize = subtitleFontSize;
+  titleLine1.height = subtitleHeight;
   titleLine1.shadowColor = "rgba(255, 100, 20, 0)";
-  titleLine1.shadowBlur = 15;
-  titleLine1.shadowOffsetY = 1;
+  titleLine1.shadowBlur = 15 * titleScale;
+  titleLine1.shadowOffsetY = 1 * titleScale;
   panel.addControl(titleLine1);
 
   // Main title - BIG, fills width on mobile
@@ -200,32 +225,32 @@ export function createTitleScene(
   titleLine2.color = "rgba(255, 179, 102, 0)"; // Start invisible
   titleLine2.fontFamily = "'Bebas Neue', 'Arial Black', sans-serif";
   titleLine2.fontWeight = "400";
-  titleLine2.fontSize = 64;
-  titleLine2.height = "75px";
+  titleLine2.fontSize = mainTitleFontSize;
+  titleLine2.height = mainTitleHeight;
   titleLine2.shadowColor = "rgba(255, 80, 0, 0)";
-  titleLine2.shadowBlur = 25;
-  titleLine2.shadowOffsetY = 3;
+  titleLine2.shadowBlur = 25 * titleScale;
+  titleLine2.shadowOffsetY = 3 * titleScale;
   panel.addControl(titleLine2);
 
   // Thin decorative line
   const divider = new Rectangle();
-  divider.width = "70%";
-  divider.height = "2px";
+  divider.width = dividerWidthPercent;
+  divider.height = `${Math.max(2, Math.round(2 * titleScale))}px`;
   divider.thickness = 0;
   divider.background = "rgba(255, 150, 80, 0)"; // Start invisible
   panel.addControl(divider);
 
   // Spacer
   const spacer = new TextBlock();
-  spacer.height = "40px";
+  spacer.height = spacerHeight;
   spacer.text = "";
   panel.addControl(spacer);
 
   // Start fade-in after fonts load (including button font size)
   Promise.all([
-    document.fonts.load("24px 'Bebas Neue'"),
-    document.fonts.load("64px 'Bebas Neue'"),
-    document.fonts.load("18px 'Bebas Neue'"),
+    document.fonts.load(`${subtitleFontSize}px 'Bebas Neue'`),
+    document.fonts.load(`${mainTitleFontSize}px 'Bebas Neue'`),
+    document.fonts.load(`${buttonFontSize}px 'Bebas Neue'`),
   ]).then(() => {
     // Force buttons to recalculate layout now that fonts are loaded
     for (const btn of modeButtons) {
@@ -243,10 +268,10 @@ export function createTitleScene(
   // Helper to create a styled button
   function createModeButton(text: string, mode: GameMode): Button {
     const button = Button.CreateSimpleButton(`mode_${mode}`, text);
-    button.width = "70%";
-    button.height = "50px";
+    button.width = buttonWidthPercent;
+    button.height = buttonHeight;
     button.background = "rgba(40, 20, 15, 0.6)";
-    button.cornerRadius = 4;
+    button.cornerRadius = Math.round(4 * buttonScale);
     button.thickness = 1;
     button.color = TITLE_TEXT_COLORS.buttonText;
     button.hoverCursor = "pointer";
@@ -256,7 +281,7 @@ export function createTitleScene(
     if (button.textBlock) {
       button.textBlock.color = TITLE_TEXT_COLORS.buttonText;
       button.textBlock.fontFamily = "'Bebas Neue', 'Arial Black', sans-serif";
-      button.textBlock.fontSize = 18;
+      button.textBlock.fontSize = buttonFontSize;
       button.textBlock.textHorizontalAlignment = Control.HORIZONTAL_ALIGNMENT_CENTER;
     }
 
@@ -293,7 +318,7 @@ export function createTitleScene(
 
   // Small spacer between buttons
   const buttonSpacer = new TextBlock();
-  buttonSpacer.height = "15px";
+  buttonSpacer.height = buttonSpacerHeight;
   buttonSpacer.text = "";
   panel.addControl(buttonSpacer);
 
