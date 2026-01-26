@@ -5,6 +5,26 @@
  * Use these modules for headless simulations, AI, and game balancing.
  */
 
+// Command pattern
+export {
+  type BattleCommand,
+  type MoveCommand,
+  type AttackCommand,
+  type HealCommand,
+  type ConcealCommand,
+  type CoverCommand,
+  type CommandExecutor,
+  createMoveCommand,
+  createAttackCommand,
+  createHealCommand,
+  createConcealCommand,
+  createCoverCommand,
+  CommandQueue,
+  processCommandQueue,
+  isValidMoveCommand,
+  describeCommand,
+} from "./commands";
+
 // State types and helpers
 export {
   type GridPosition,

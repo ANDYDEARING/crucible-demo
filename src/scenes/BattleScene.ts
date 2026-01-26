@@ -95,11 +95,24 @@ import { MUSIC, SFX, AUDIO_VOLUMES, LOOP_BUFFER_TIME } from "../config";
 // Import utility functions
 import { hexToColor3, createMusicPlayer, playSfx, rgbToColor3 } from "../utils";
 
+// Import command pattern for action queue
+import {
+  type CommandExecutor,
+  CommandQueue,
+  createMoveCommand,
+  createAttackCommand,
+  createHealCommand,
+  createConcealCommand,
+  createCoverCommand,
+  processCommandQueue,
+} from "../battle";
+
 // Pure game logic is available in /src/battle/ for headless simulations.
 // This file (BattleScene.ts) handles visual rendering and uses inline logic
 // that mirrors the pure versions. Future refactor: delegate to battle module.
 // See: /src/battle/state.ts (UnitState, BattleState)
 //      /src/battle/rules.ts (movement, LOS, combat, turns)
+//      /src/battle/commands.ts (Command pattern for actions)
 
 export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, loadout: Loadout | null): Scene {
   const scene = new Scene(engine);
@@ -502,6 +515,21 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
   // Current turn state for preview/undo system
   let turnState: TurnState | null = null;
   let currentActionMode: ActionMode = "none";
+
+  // Command queue for pending actions
+  const commandQueue = new CommandQueue();
+
+  // Helper to get unit ID (for command serialization)
+  function getUnitId(unit: Unit): string {
+    return `${unit.team}-${units.indexOf(unit)}`;
+  }
+
+  // Helper to find unit by ID
+  function findUnitById(id: string): Unit | undefined {
+    const [team, indexStr] = id.split("-");
+    const index = parseInt(indexStr, 10);
+    return units.find((u, i) => u.team === team && i === index);
+  }
 
   // Callback for when a unit's turn starts (set later by command menu)
   let onTurnStartCallback: ((unit: Unit) => void) | null = null;
@@ -1398,6 +1426,9 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
     createCornerIndicators(unit);
 
     updateTurnIndicator();
+
+    // Clear command queue for new turn
+    commandQueue.clear();
 
     // Initialize turn state for preview/undo system (using centralized constant)
     turnState = {
@@ -2524,7 +2555,10 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
   function queueMoveAction(unit: Unit, targetX: number, targetZ: number): void {
     if (!turnState) return;
 
-    // Add to pending actions
+    // Add command to queue
+    commandQueue.enqueue(createMoveCommand(targetX, targetZ));
+
+    // Also add to pending actions (for UI preview compatibility)
     turnState.pendingActions.push({
       type: "move",
       targetX,
@@ -2554,7 +2588,10 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
   function queueAttackAction(_attacker: Unit, defender: Unit): void {
     if (!turnState) return;
 
-    // Add to pending actions
+    // Add command to queue
+    commandQueue.enqueue(createAttackCommand(getUnitId(defender)));
+
+    // Also add to pending actions (for UI preview compatibility)
     turnState.pendingActions.push({
       type: "attack",
       targetUnit: defender,
@@ -2579,7 +2616,10 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
   function queueHealAction(_healer: Unit, target: Unit): void {
     if (!turnState) return;
 
-    // Add to pending actions
+    // Add command to queue
+    commandQueue.enqueue(createHealCommand(getUnitId(target)));
+
+    // Also add to pending actions (for UI preview compatibility)
     turnState.pendingActions.push({
       type: "ability",
       abilityName: "heal",
@@ -2611,7 +2651,10 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
       return;
     }
 
-    // Add to pending actions
+    // Add command to queue
+    commandQueue.enqueue(createConcealCommand());
+
+    // Also add to pending actions (for UI preview compatibility)
     turnState.pendingActions.push({
       type: "ability",
       abilityName: "conceal",
@@ -2632,7 +2675,10 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
   function queueCoverAction(unit: Unit): void {
     if (!turnState) return;
 
-    // Add to pending actions
+    // Add command to queue
+    commandQueue.enqueue(createCoverCommand());
+
+    // Also add to pending actions (for UI preview compatibility)
     turnState.pendingActions.push({
       type: "ability",
       abilityName: "cover",
@@ -2678,6 +2724,7 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
   }
 
   // Execute all queued actions sequentially
+  // Alternative: Use processCommandQueue(commandQueue, commandExecutor) for command-based execution
   function executeQueuedActions(): void {
     if (!turnState || turnState.pendingActions.length === 0) {
       endCurrentUnitTurn();
@@ -2687,6 +2734,12 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
     isExecutingActions = true;
     const unit = turnState.unit;
     const actions = [...turnState.pendingActions];
+
+    // Note: commandQueue contains the same actions as pendingActions
+    // To use the command pattern instead, replace the code below with:
+    // processCommandQueue(commandQueue, commandExecutor);
+    // return;
+    void processCommandQueue; // Mark as available for future use
 
     clearShadowPreview();
     clearAttackPreview();
@@ -2986,15 +3039,94 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
     }
   }
 
+  // ============================================
+  // COMMAND EXECUTOR
+  // ============================================
+  // Implements the CommandExecutor interface from /src/battle/commands.ts
+  // This allows actions to be executed via the command pattern.
+
+  /**
+   * Command executor implementation for the battle scene.
+   * Bridges between pure commands and visual execution.
+   */
+  const commandExecutor: CommandExecutor = {
+    executeMove(command, onComplete) {
+      if (!turnState) { onComplete(); return; }
+      const unit = turnState.unit;
+      animateMovement(unit, command.targetX, command.targetZ, () => {
+        updateCornerIndicators(unit);
+        onComplete();
+      });
+    },
+
+    executeAttack(command, onComplete) {
+      if (!turnState) { onComplete(); return; }
+      const unit = turnState.unit;
+      const target = findUnitById(command.targetUnitId);
+      if (!target || target.hp <= 0) { onComplete(); return; }
+      executeAttack(unit, target, onComplete);
+    },
+
+    executeHeal(command, onComplete) {
+      if (!turnState) { onComplete(); return; }
+      const unit = turnState.unit;
+      const target = findUnitById(command.targetUnitId);
+      if (!target) { onComplete(); return; }
+      executeHeal(unit, target, onComplete);
+    },
+
+    executeConceal(_command, onComplete) {
+      if (!turnState) { onComplete(); return; }
+      executeConceal(turnState.unit, onComplete);
+    },
+
+    executeCover(_command, onComplete) {
+      if (!turnState) { onComplete(); return; }
+      const unit = turnState.unit;
+      // Find final position from remaining commands
+      const lastMove = commandQueue.getLastMoveCommand();
+      const finalX = lastMove?.targetX ?? unit.gridX;
+      const finalZ = lastMove?.targetZ ?? unit.gridZ;
+      executeCover(unit, onComplete, finalX, finalZ);
+    },
+
+    onQueueComplete() {
+      if (turnState) {
+        faceClosestEnemy(turnState.unit);
+      }
+      isExecutingActions = false;
+      endCurrentUnitTurn();
+    },
+
+    checkReactions(onReactionComplete) {
+      if (!turnState || turnState.unit.hp <= 0) return false;
+      return checkAndTriggerCoverReaction(turnState.unit, () => {
+        faceClosestEnemy(turnState!.unit);
+        isExecutingActions = false;
+        endCurrentUnitTurn();
+        onReactionComplete();
+      });
+    },
+  };
+
+  // Export command executor for external use (AI, network play)
+  void commandExecutor;
+
+  // ============================================
+  // UNDO SYSTEM
+  // ============================================
+
   // Undo the last queued action
   function undoLastAction(): void {
     if (!turnState || turnState.pendingActions.length === 0) return;
 
+    // Pop from both queues
+    const lastCommand = commandQueue.pop();
     const lastAction = turnState.pendingActions.pop();
     turnState.actionsRemaining++;
 
     // If it was a move, clear the shadow preview and update cover preview
-    if (lastAction?.type === "move") {
+    if (lastAction?.type === "move" || lastCommand?.type === "move") {
       clearShadowPreview();
       shadowPosition = null;
       updateCoverPreview();  // Update in case cover depends on position
@@ -3002,6 +3134,9 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
 
     // If it was a cover action, clear the cover preview
     if (lastAction?.type === "ability" && lastAction.abilityName === "cover") {
+      clearCoverPreview();
+    }
+    if (lastCommand?.type === "cover") {
       clearCoverPreview();
     }
 
