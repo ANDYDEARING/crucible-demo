@@ -67,16 +67,20 @@ export function createTitleScene(
 
   // === RESPONSIVE SIZING ===
   // Breakpoints: mobile (<600), tablet (600-1024), desktop (>1024)
+  // Also detect landscape phones (short height) to use compact scaling
   const screenWidth = engine.getRenderWidth();
-  const isTablet = screenWidth >= 600 && screenWidth < 1024;
+  const screenHeight = engine.getRenderHeight();
+  const isLandscapePhone = screenHeight < 500 && screenWidth < 1024;
+  const isTablet = !isLandscapePhone && screenWidth >= 600 && screenWidth < 1024;
   const isDesktop = screenWidth >= 1024;
 
   // Scale factors based on screen size (mobile = 1.0 baseline)
   // Titles scale more aggressively, buttons stay modest
-  const titleScale = isDesktop ? 2.2 : isTablet ? 1.7 : 1.0;
-  const buttonScale = isDesktop ? 1.3 : isTablet ? 1.15 : 1.0;
-  const buttonWidthPercent = isDesktop ? "30%" : isTablet ? "45%" : "70%";
-  const dividerWidthPercent = isDesktop ? "30%" : isTablet ? "45%" : "70%";
+  // Landscape phones: bigger title, smaller buttons to fit
+  const titleScale = isDesktop ? 2.2 : isTablet ? 1.7 : isLandscapePhone ? 1.0 : 1.0;
+  const buttonScale = isDesktop ? 1.3 : isTablet ? 1.15 : isLandscapePhone ? 0.7 : 1.0;
+  const buttonWidthPercent = isDesktop ? "30%" : isTablet ? "45%" : isLandscapePhone ? "30%" : "70%";
+  const dividerWidthPercent = isDesktop ? "30%" : isTablet ? "45%" : isLandscapePhone ? "40%" : "70%";
 
   // Font sizes
   const subtitleFontSize = Math.round(24 * titleScale);
@@ -197,7 +201,7 @@ export function createTitleScene(
   const panel = new StackPanel();
   panel.width = "100%";
   panel.verticalAlignment = Control.VERTICAL_ALIGNMENT_CENTER;
-  panel.top = "-5%";
+  panel.top = isLandscapePhone ? "0%" : "-5%";
   gui.addControl(panel);
 
   // Fade-in state - using centralized timing constants

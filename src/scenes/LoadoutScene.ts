@@ -1183,6 +1183,9 @@ export function createLoadoutScene(
       tooltipBackdrop.onPointerClickObservable.add(() => {
         if (tooltipBackdrop) tooltipBackdrop.isVisible = false;
         if (tooltipOverlay) tooltipOverlay.isVisible = false;
+        // Reset info circle style
+        infoCircle.background = COLORS.bgButton;
+        infoCircle.color = COLORS.borderWarm;
       });
 
       // Tooltip overlay for mobile - fixed height to accommodate preview
