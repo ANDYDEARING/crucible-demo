@@ -227,6 +227,9 @@ export function createLoadoutScene(
     player2: [],
   };
 
+  // Track callbacks to mark units as customized (called when appearance editor saves)
+  const customizedMarkers: Record<string, () => void> = {};
+
   // ============================================
   // MAIN LAYOUT - Custom drag-to-scroll
   // ============================================
@@ -547,11 +550,17 @@ export function createLoadoutScene(
   const editorPreviewImage = new Image("editorPreviewImg", "");
   editorPreviewImage.stretch = Image.STRETCH_UNIFORM;
 
-  // Update canvas from RTT
+  // Update canvas from RTT - only when dirty (model/appearance changed)
   let editorFrameCount = 0;
+  let editorPreviewDirty = 0; // Counter: update for N frames after change, then stop
   editorRtt.onAfterRenderObservable.add(() => {
+    // Only update if editor is visible and preview is dirty
+    if (!appearanceOverlay.isVisible || editorPreviewDirty <= 0) return;
+
     editorFrameCount++;
-    if (editorFrameCount % 3 !== 0) return;
+    if (editorFrameCount % 2 !== 0) return;
+
+    editorPreviewDirty--;
 
     editorRtt.readPixels()?.then((buffer) => {
       if (!buffer) return;
@@ -761,6 +770,9 @@ export function createLoadoutScene(
     if (idleAnim) {
       idleAnim.start(true);
     }
+
+    // Mark preview as needing update (update for 30 frames to catch animation settling)
+    editorPreviewDirty = 30;
   }
 
   // Load editor preview model
@@ -1006,9 +1018,14 @@ export function createLoadoutScene(
   saveBtn.onPointerOutObservable.add(() => { saveBtn.background = COLORS.success; });
   saveBtn.onPointerClickObservable.add(() => {
     if (editingUnit) {
-      const { unitIndex, selectionArray } = editingUnit;
+      const { playerId, unitIndex, selectionArray } = editingUnit;
       if (selectionArray[unitIndex]) {
         selectionArray[unitIndex].customization = { ...editingCustomization };
+        // Mark this unit as customized so class changes won't randomize it
+        const markerKey = `${playerId}_${unitIndex}`;
+        if (customizedMarkers[markerKey]) {
+          customizedMarkers[markerKey]();
+        }
       }
     }
     closeAppearanceEditor();
@@ -1528,11 +1545,16 @@ export function createLoadoutScene(
       mobilePreviewImage.height = "100%";
       mobilePreviewContainer.addControl(mobilePreviewImage);
 
-      // Update canvas from RTT
+      // Update canvas from RTT - only when dirty
       let mobileFrameCount = 0;
+      let mobilePreviewDirty = 30; // Start dirty to render initial model
       mobileRtt.onAfterRenderObservable.add(() => {
+        if (mobilePreviewDirty <= 0) return;
+
         mobileFrameCount++;
-        if (mobileFrameCount % 3 !== 0) return;
+        if (mobileFrameCount % 2 !== 0) return;
+
+        mobilePreviewDirty--;
 
         mobileRtt.readPixels()?.then((buffer) => {
           if (!buffer || !mobilePreviewImage) return;
@@ -1610,6 +1632,9 @@ export function createLoadoutScene(
         if (idleAnim) {
           idleAnim.start(true);
         }
+
+        // Mark preview as needing update
+        mobilePreviewDirty = 30;
       };
 
       // Load mobile preview model
@@ -1779,11 +1804,16 @@ export function createLoadoutScene(
       previewImage.height = "100%";
       previewContainer.addControl(previewImage);
 
-      // Update canvas from RTT (throttled)
+      // Update canvas from RTT - only when dirty
       let frameCount = 0;
+      let previewDirty = 30; // Start dirty to render initial model
       rtt.onAfterRenderObservable.add(() => {
+        if (previewDirty <= 0) return;
+
         frameCount++;
-        if (frameCount % 3 !== 0) return;
+        if (frameCount % 2 !== 0) return;
+
+        previewDirty--;
 
         rtt.readPixels()?.then((buffer) => {
           if (!buffer) return;
@@ -1870,6 +1900,9 @@ export function createLoadoutScene(
         if (idleAnim) {
           idleAnim.start(true);
         }
+
+        // Mark preview as needing update
+        previewDirty = 30;
       };
 
       // Load preview model (only when class or body changes)
@@ -1942,6 +1975,9 @@ export function createLoadoutScene(
     }
 
     // Helper to generate random customization
+    // Track whether this unit has been manually customized via the editor
+    let hasBeenCustomized = false;
+
     function randomizeCustomization(): UnitCustomization {
       return {
         body: Math.random() > 0.5 ? "male" : "female",
@@ -1954,7 +1990,12 @@ export function createLoadoutScene(
       };
     }
 
-    function updateUnitSelection(forceRandomize = false): void {
+    // Mark this unit as customized (called when appearance editor saves)
+    function markAsCustomized(): void {
+      hasBeenCustomized = true;
+    }
+
+    function updateUnitSelection(isClassChange = false): void {
       while (selectionArray.length < unitIndex + 1) {
         selectionArray.push({
           unitClass: "soldier",
@@ -1964,8 +2005,10 @@ export function createLoadoutScene(
 
       const existingCustomization = selectionArray[unitIndex]?.customization;
 
-      // Randomize if forced (class change) or if no existing customization
-      const shouldRandomize = forceRandomize || !existingCustomization;
+      // Only randomize if:
+      // 1. No existing customization, OR
+      // 2. Class changed AND unit hasn't been manually customized
+      const shouldRandomize = !existingCustomization || (isClassChange && !hasBeenCustomized);
 
       selectionArray[unitIndex] = {
         unitClass: selectedClass,
@@ -1980,6 +2023,9 @@ export function createLoadoutScene(
 
       updateStartButton();
     }
+
+    // Store reference for marking as customized from outside
+    customizedMarkers[`${playerId}_${unitIndex}`] = markAsCustomized;
 
     // Initialize selection with randomized customization, then update preview
     updateUnitSelection(true);
