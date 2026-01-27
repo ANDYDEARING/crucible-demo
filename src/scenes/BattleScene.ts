@@ -123,7 +123,10 @@ import {
 //      /src/battle/commands.ts (Command pattern for actions)
 //      /src/battle/controllers.ts (Controller abstraction for PvE/PvP)
 
-export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, loadout: Loadout | null): Scene {
+// Greek letters for unit designations (matches LoadoutScene)
+const UNIT_DESIGNATIONS = ["Δ", "Ψ", "Ω"]; // Delta, Psi, Omega
+
+export function createBattleScene(engine: Engine, canvas: HTMLCanvasElement, loadout: Loadout | null): Scene {
   const scene = new Scene(engine);
   // Use centralized scene background color
   const bg = SCENE_BACKGROUNDS.battle;
@@ -1571,8 +1574,6 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
     // Create pulsing corner indicators for active unit
     createCornerIndicators(unit);
 
-    updateTurnIndicator();
-
     // Clear command queue for new turn
     commandQueue.clear();
 
@@ -2659,20 +2660,7 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
     endCurrentUnitTurn();
   }
 
-  function updateTurnIndicator(): void {
-    if (!currentUnit) return;
-
-    const teamName = currentUnit.team === "player1" ? "Player 1" : "Player 2";
-    // Convert Color3 to hex for GUI
-    const r = Math.round(currentUnit.teamColor.r * 255).toString(16).padStart(2, '0');
-    const g = Math.round(currentUnit.teamColor.g * 255).toString(16).padStart(2, '0');
-    const b = Math.round(currentUnit.teamColor.b * 255).toString(16).padStart(2, '0');
-    const teamColorHex = `#${r}${g}${b}`;
-
-    // Just show team turn - unit details will be in popup
-    turnText.text = `${teamName}'s Turn`;
-    turnText.color = teamColorHex;
-  }
+  // updateTurnIndicator removed - info now shown in command menu popup
 
   function canSelectUnit(unit: Unit): boolean {
     // Can only select the current unit whose turn it is
@@ -3443,14 +3431,7 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
     }
   });
 
-  // Turn indicator (just the team turn, unit details will be in popup)
-  const turnText = new TextBlock();
-  turnText.text = "";
-  turnText.color = "#4488ff";
-  turnText.fontSize = isTouch ? 18 : 24;
-  turnText.top = "-45%";
-  turnText.fontWeight = "bold";
-  gui.addControl(turnText);
+  // Turn indicator removed - all info now in command menu popup
 
   // ============================================
   // CAMERA MODE TOGGLE (touch devices only)
@@ -3462,44 +3443,84 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
   let lastPanX = 0;
   let lastPanY = 0;
 
-  // Camera mode toggle button - top right
-  const cameraModeBtn = Button.CreateSimpleButton("cameraMode", "");
-  cameraModeBtn.width = "50px";
-  cameraModeBtn.height = "50px";
-  cameraModeBtn.color = "white";
-  cameraModeBtn.background = "#444444";
-  cameraModeBtn.cornerRadius = 25;
-  cameraModeBtn.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_RIGHT;
-  cameraModeBtn.verticalAlignment = Control.VERTICAL_ALIGNMENT_TOP;
-  cameraModeBtn.left = "-15px";
-  cameraModeBtn.top = "15px";
-  cameraModeBtn.thickness = 2;
+  // Camera mode toggle container - top right, shows both icons
+  const cameraModeContainer = new Rectangle("cameraModeContainer");
+  cameraModeContainer.width = "90px";
+  cameraModeContainer.height = "44px";
+  cameraModeContainer.background = "#333333";
+  cameraModeContainer.cornerRadius = 22;
+  cameraModeContainer.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_RIGHT;
+  cameraModeContainer.verticalAlignment = Control.VERTICAL_ALIGNMENT_TOP;
+  cameraModeContainer.left = "-15px";
+  cameraModeContainer.top = "15px";
+  cameraModeContainer.thickness = 2;
+  cameraModeContainer.color = "#555555";
 
-  // Icon text block (we'll use unicode symbols)
-  const cameraModeIcon = new TextBlock("cameraModeIcon");
-  cameraModeIcon.fontSize = 24;
-  cameraModeIcon.color = "white";
-  cameraModeBtn.addControl(cameraModeIcon);
+  // Grid to hold both toggle options
+  const toggleGrid = new Grid("toggleGrid");
+  toggleGrid.addColumnDefinition(0.5);
+  toggleGrid.addColumnDefinition(0.5);
+  cameraModeContainer.addControl(toggleGrid);
+
+  // Rotate button (left side)
+  const rotateBtn = Button.CreateSimpleButton("rotateMode", "");
+  rotateBtn.width = "40px";
+  rotateBtn.height = "36px";
+  rotateBtn.background = "#555555";
+  rotateBtn.cornerRadius = 18;
+  rotateBtn.thickness = 0;
+  const rotateIcon = new TextBlock("rotateIcon", "⟳");
+  rotateIcon.fontSize = 20;
+  rotateIcon.color = "white";
+  rotateIcon.top = "-1px";  // Nudge up to center visually
+  rotateBtn.addControl(rotateIcon);
+  toggleGrid.addControl(rotateBtn, 0, 0);
+
+  // Pan button (right side)
+  const panBtn = Button.CreateSimpleButton("panMode", "");
+  panBtn.width = "40px";
+  panBtn.height = "36px";
+  panBtn.background = "transparent";
+  panBtn.cornerRadius = 18;
+  panBtn.thickness = 0;
+  const panIcon = new TextBlock("panIcon", "✥");
+  panIcon.fontSize = 18;
+  panIcon.color = "#888888";
+  panBtn.addControl(panIcon);
+  toggleGrid.addControl(panBtn, 0, 1);
 
   function updateCameraModeButton(): void {
     if (cameraMode === "rotate") {
-      // Rotation mode: show elliptical arrow (rotation icon)
-      cameraModeIcon.text = "⟳";  // Clockwise rotation arrow
-      cameraModeBtn.background = "#444444";
+      // Highlight rotate button
+      rotateBtn.background = "#555555";
+      rotateIcon.color = "white";
+      panBtn.background = "transparent";
+      panIcon.color = "#888888";
       // Re-enable camera's built-in rotation controls
       camera.attachControl(true);
     } else {
-      // Pan mode: show compass (lateral movement icon)
-      cameraModeIcon.text = "✥";  // Four-pointed star / compass
-      cameraModeBtn.background = "#664422";
+      // Highlight pan button
+      rotateBtn.background = "transparent";
+      rotateIcon.color = "#888888";
+      panBtn.background = "#664422";
+      panIcon.color = "white";
       // Detach camera controls - we'll handle panning manually
       camera.detachControl();
     }
   }
 
-  cameraModeBtn.onPointerClickObservable.add(() => {
-    cameraMode = cameraMode === "rotate" ? "pan" : "rotate";
-    updateCameraModeButton();
+  rotateBtn.onPointerClickObservable.add(() => {
+    if (cameraMode !== "rotate") {
+      cameraMode = "rotate";
+      updateCameraModeButton();
+    }
+  });
+
+  panBtn.onPointerClickObservable.add(() => {
+    if (cameraMode !== "pan") {
+      cameraMode = "pan";
+      updateCameraModeButton();
+    }
   });
 
   // Custom pan handling when in pan mode
@@ -3535,9 +3556,59 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
     }
   });
 
+  // Pinch-to-zoom handling (works in both modes)
+  let initialPinchDistance = 0;
+  let initialRadius = camera.radius;
+
+  const handleTouchStart = (e: TouchEvent) => {
+    if (e.touches.length === 2) {
+      // Two fingers down - start pinch
+      const dx = e.touches[0].clientX - e.touches[1].clientX;
+      const dy = e.touches[0].clientY - e.touches[1].clientY;
+      initialPinchDistance = Math.sqrt(dx * dx + dy * dy);
+      initialRadius = camera.radius;
+      isPanning = false; // Cancel any panning
+    }
+  };
+
+  const handleTouchMove = (e: TouchEvent) => {
+    if (e.touches.length === 2 && initialPinchDistance > 0) {
+      // Two fingers moving - zoom
+      const dx = e.touches[0].clientX - e.touches[1].clientX;
+      const dy = e.touches[0].clientY - e.touches[1].clientY;
+      const currentDistance = Math.sqrt(dx * dx + dy * dy);
+
+      const scale = initialPinchDistance / currentDistance;
+      let newRadius = initialRadius * scale;
+
+      // Clamp to camera limits
+      newRadius = Math.max(camera.lowerRadiusLimit || 5, Math.min(camera.upperRadiusLimit || 50, newRadius));
+      camera.radius = newRadius;
+
+      e.preventDefault(); // Prevent page zoom
+    }
+  };
+
+  const handleTouchEnd = (e: TouchEvent) => {
+    if (e.touches.length < 2) {
+      initialPinchDistance = 0;
+    }
+  };
+
+  canvas.addEventListener("touchstart", handleTouchStart, { passive: false });
+  canvas.addEventListener("touchmove", handleTouchMove, { passive: false });
+  canvas.addEventListener("touchend", handleTouchEnd);
+
+  // Clean up touch listeners on scene dispose
+  scene.onDisposeObservable.add(() => {
+    canvas.removeEventListener("touchstart", handleTouchStart);
+    canvas.removeEventListener("touchmove", handleTouchMove);
+    canvas.removeEventListener("touchend", handleTouchEnd);
+  });
+
   // Only show on touch devices
   if (isTouch) {
-    gui.addControl(cameraModeBtn);
+    gui.addControl(cameraModeContainer);
     updateCameraModeButton();
   }
 
@@ -3778,9 +3849,11 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
     const b = Math.round(currentUnit.teamColor.b * 255).toString(16).padStart(2, '0');
     commandMenu.color = `#${r}${g}${b}`;
 
-    // Update unit name from class data
+    // Update unit header: designation + class + speed
     const classData = getClassData(currentUnit.unitClass);
-    menuUnitName.text = classData.name.toUpperCase();
+    const designation = UNIT_DESIGNATIONS[currentUnit.loadoutIndex] || "?";
+    const speed = getEffectiveSpeed(currentUnit).toFixed(1);
+    menuUnitName.text = `${designation} ${classData.name}, Speed ${speed}`;
 
     // Update ability button from class data
     if (abilityBtn.textBlock) {
