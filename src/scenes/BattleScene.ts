@@ -4442,11 +4442,15 @@ export function createBattleScene(engine: Engine, canvas: HTMLCanvasElement, loa
       if (allActionsUsed) {
         // Green checkmark - all actions used, ready to execute
         executeBtn.textBlock.text = "✓";
+        executeBtn.textBlock.top = "0px";
+        executeBtn.textBlock.left = "0px";
         executeBtn.background = "#203a20";
         executeBtn.color = "#66ff66";
       } else {
         // Yellow skip - has unused actions
-        executeBtn.textBlock.text = "⏭";
+        executeBtn.textBlock.text = "»";
+        executeBtn.textBlock.top = "-2px";
+        executeBtn.textBlock.left = "1px";
         executeBtn.background = "#3a3a20";
         executeBtn.color = "#ffff66";
       }
