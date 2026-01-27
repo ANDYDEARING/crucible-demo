@@ -10,7 +10,7 @@
  */
 
 import type { Mesh, AbstractMesh, AnimationGroup, Color3 } from "@babylonjs/core";
-import type { Rectangle } from "@babylonjs/gui";
+import type { Rectangle, TextBlock } from "@babylonjs/gui";
 
 // =============================================================================
 // SCENE NAVIGATION
@@ -208,6 +208,7 @@ export interface Unit {
   // Visual references (Babylon.js)
   hpBar?: Rectangle;
   hpBarBg?: Rectangle;
+  designationLabel?: TextBlock;
   originalColor: Color3;
   modelRoot?: AbstractMesh;
   modelMeshes?: AbstractMesh[];

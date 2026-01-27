@@ -1381,6 +1381,9 @@ export function createBattleScene(engine: Engine, canvas: HTMLCanvasElement, loa
       if (unit.hpBarBg) {
         unit.hpBarBg.isVisible = true;
       }
+      if (unit.designationLabel) {
+        unit.designationLabel.isVisible = true;
+      }
     }
 
     // Start the game after all units are loaded
@@ -3132,6 +3135,11 @@ export function createBattleScene(engine: Engine, canvas: HTMLCanvasElement, loa
 
       updateHpBar(defender);
 
+      // Update status bar if current unit's HP changed
+      if (defender === currentUnit) {
+        updateCurrentUnitStatusBar();
+      }
+
       // Cancel cover when hit (even if surviving)
       if (defender.isCovering) {
         console.log(`${defender.team} ${defender.unitClass}'s Cover is broken by being hit!`);
@@ -3145,6 +3153,7 @@ export function createBattleScene(engine: Engine, canvas: HTMLCanvasElement, loa
           defender.mesh.dispose();
           if (defender.hpBar) defender.hpBar.dispose();
           if (defender.hpBarBg) defender.hpBarBg.dispose();
+          if (defender.designationLabel) defender.designationLabel.dispose();
           if (defender.modelRoot) defender.modelRoot.dispose();
           if (defender.animationGroups) defender.animationGroups.forEach(ag => ag.dispose());
           onComplete();
@@ -3196,6 +3205,11 @@ export function createBattleScene(engine: Engine, canvas: HTMLCanvasElement, loa
 
     playSfx(sfx.heal);
     updateHpBar(target);
+
+    // Update status bar if current unit's HP changed
+    if (target === currentUnit) {
+      updateCurrentUnitStatusBar();
+    }
   }
 
   // Execute conceal ability (called during execution phase)
@@ -3806,6 +3820,89 @@ export function createBattleScene(engine: Engine, canvas: HTMLCanvasElement, loa
 
   gui.addControl(turnOrderBtn);
 
+  // Current unit status bar - top center, between hamburger and toggle
+  // Same width calculation as queue panel below
+  const statusBarWidth = Math.min(screenWidth - 160, 400);
+  const currentUnitStatusBar = new Rectangle("currentUnitStatusBar");
+  currentUnitStatusBar.width = `${statusBarWidth}px`;
+  currentUnitStatusBar.height = "44px";
+  currentUnitStatusBar.background = "rgba(20, 20, 30, 0.8)";
+  currentUnitStatusBar.cornerRadius = 8;
+  currentUnitStatusBar.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_CENTER;
+  currentUnitStatusBar.verticalAlignment = Control.VERTICAL_ALIGNMENT_TOP;
+  currentUnitStatusBar.top = "15px";
+  currentUnitStatusBar.thickness = 0;
+  currentUnitStatusBar.isVisible = false;
+  gui.addControl(currentUnitStatusBar);
+
+  // Status bar with two lines
+  const statusStack = new StackPanel("statusStack");
+  statusStack.isVertical = true;
+  currentUnitStatusBar.addControl(statusStack);
+
+  // Line 1: Symbol Class: Weapon
+  const statusLine1 = new TextBlock("statusLine1");
+  statusLine1.text = "";
+  statusLine1.fontSize = 12;
+  statusLine1.fontWeight = "bold";
+  statusLine1.color = "white";
+  statusLine1.height = "20px";
+  statusStack.addControl(statusLine1);
+
+  // Line 2: Boost | HP (HP in HP color)
+  const statusLine2Stack = new StackPanel("statusLine2Stack");
+  statusLine2Stack.isVertical = false;
+  statusLine2Stack.height = "18px";
+  statusLine2Stack.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_CENTER;
+  statusStack.addControl(statusLine2Stack);
+
+  const statusBoostText = new TextBlock("statusBoostText");
+  statusBoostText.text = "";
+  statusBoostText.fontSize = 11;
+  statusBoostText.color = "white";
+  statusBoostText.resizeToFit = true;
+  statusLine2Stack.addControl(statusBoostText);
+
+  const statusHpText = new TextBlock("statusHpText");
+  statusHpText.text = "";
+  statusHpText.fontSize = 11;
+  statusHpText.color = HP_BAR_GREEN;
+  statusHpText.resizeToFit = true;
+  statusLine2Stack.addControl(statusHpText);
+
+  function getHpColor(unit: Unit): string {
+    const hpPercent = unit.hp / unit.maxHp;
+    if (hpPercent < HP_LOW_THRESHOLD) return HP_BAR_RED;
+    if (hpPercent < HP_MEDIUM_THRESHOLD) return HP_BAR_ORANGE;
+    return HP_BAR_GREEN;
+  }
+
+  function updateCurrentUnitStatusBar(): void {
+    if (!currentUnit) {
+      currentUnitStatusBar.isVisible = false;
+      return;
+    }
+
+    const designation = UNIT_DESIGNATIONS[currentUnit.loadoutIndex] || "?";
+    const className = getClassData(currentUnit.unitClass).name;
+    const weapon = currentUnit.customization?.combatStyle === "melee" ? "Melee" : "Ranged";
+    const boostData = BOOST_INFO[currentUnit.boost] || BOOST_INFO[0];
+
+    // Line 1: Symbol Class: Weapon in team color
+    statusLine1.text = `${designation} ${className}: ${weapon}`;
+    const r = Math.round(currentUnit.teamColor.r * 255).toString(16).padStart(2, '0');
+    const g = Math.round(currentUnit.teamColor.g * 255).toString(16).padStart(2, '0');
+    const b = Math.round(currentUnit.teamColor.b * 255).toString(16).padStart(2, '0');
+    statusLine1.color = `#${r}${g}${b}`;
+
+    // Line 2: Boost | HP
+    statusBoostText.text = `${boostData.name} | `;
+    statusHpText.text = `HP: ${currentUnit.hp}/${currentUnit.maxHp}`;
+    statusHpText.color = getHpColor(currentUnit);
+
+    currentUnitStatusBar.isVisible = true;
+  }
+
   // Turn order modal
   const turnOrderBackdrop = new Rectangle("turnOrderBackdrop");
   turnOrderBackdrop.width = "100%";
@@ -3993,9 +4090,11 @@ export function createBattleScene(engine: Engine, canvas: HTMLCanvasElement, loa
   cancelBtn.top = "-15px";
   cancelBtn.thickness = 2;
   cancelBtn.isVisible = false;
+  cancelBtn.isPointerBlocker = true;
+  cancelBtn.zIndex = 50;
   gui.addControl(cancelBtn);
 
-  cancelBtn.onPointerClickObservable.add(() => {
+  cancelBtn.onPointerUpObservable.add(() => {
     if (!currentUnit || !turnState) return;
 
     // Clear the command queue
@@ -4035,6 +4134,8 @@ export function createBattleScene(engine: Engine, canvas: HTMLCanvasElement, loa
   executeBtn.top = "-15px";
   executeBtn.thickness = 2;
   executeBtn.isVisible = false;
+  executeBtn.isPointerBlocker = true;
+  executeBtn.zIndex = 50;
   gui.addControl(executeBtn);
 
   // Pulse animation state for execute button (only when all actions used - green state)
@@ -4141,7 +4242,7 @@ export function createBattleScene(engine: Engine, canvas: HTMLCanvasElement, loa
     hideSkipConfirm();
   });
 
-  executeBtn.onPointerClickObservable.add(() => {
+  executeBtn.onPointerUpObservable.add(() => {
     if (!currentUnit || !turnState) return;
 
     // If there are unused actions, show confirmation popup
@@ -4184,12 +4285,12 @@ export function createBattleScene(engine: Engine, canvas: HTMLCanvasElement, loa
   }
 
   // ============================================
-  // ACTION COUNTER (Below HP Bar)
+  // ACTION COUNTER (Next to designation symbol)
   // ============================================
 
   const actionCounterText = new TextBlock("actionCounterText");
   actionCounterText.text = "2/2";
-  actionCounterText.fontSize = 14;
+  actionCounterText.fontSize = 12;
   actionCounterText.fontWeight = "bold";
   actionCounterText.color = "#66ff66";
   actionCounterText.outlineWidth = 2;
@@ -4215,12 +4316,12 @@ export function createBattleScene(engine: Engine, canvas: HTMLCanvasElement, loa
       actionCounterText.color = "#ff6666"; // Red
     }
 
-    // Position below HP bar (which is at HP_BAR_ANCHOR_HEIGHT with linkOffsetY=-50)
+    // Position next to designation symbol (to the right of it)
     const effectiveX = shadowPosition?.x ?? currentUnit.gridX;
     const effectiveZ = shadowPosition?.z ?? currentUnit.gridZ;
     const gridOffset = (GRID_SIZE * TILE_SIZE) / 2 - TILE_SIZE / 2;
 
-    // Convert world position to screen coordinates - position just below HP bar
+    // Convert world position to screen coordinates
     const worldPos = new Vector3(
       effectiveX * TILE_SIZE - gridOffset,
       HP_BAR_ANCHOR_HEIGHT,
@@ -4233,10 +4334,9 @@ export function createBattleScene(engine: Engine, canvas: HTMLCanvasElement, loa
       camera.viewport.toGlobal(engine.getRenderWidth(), engine.getRenderHeight())
     );
 
-    // Convert to GUI coordinates (centered), position just below HP bar
-    // HP bar is at -50 offset, so -35 puts us below it
-    actionCounterText.left = `${screenPos.x - engine.getRenderWidth() / 2}px`;
-    actionCounterText.top = `${screenPos.y - engine.getRenderHeight() / 2 - 35}px`;
+    // Position next to designation: offset X to the right by ~20px, same Y as designation (-32 offset)
+    actionCounterText.left = `${screenPos.x - engine.getRenderWidth() / 2 + 18}px`;
+    actionCounterText.top = `${screenPos.y - engine.getRenderHeight() / 2 - 32}px`;
     actionCounterText.isVisible = true;
   }
 
@@ -4633,6 +4733,7 @@ export function createBattleScene(engine: Engine, canvas: HTMLCanvasElement, loa
   onTurnStartCallback = () => {
     updateNextUpIndicator();
     updateActionButtons();
+    updateCurrentUnitStatusBar();
 
     // Auto-select the current unit and show all available actions
     if (currentUnit && !controllerManager.isAI(currentUnit.team)) {
@@ -4788,6 +4889,24 @@ async function createUnit(
   hpBar.left = "2px";
   hpBarBg.addControl(hpBar);
 
+  // Unit designation (Greek symbol) under HP bar in team color
+  const designation = UNIT_DESIGNATIONS[loadoutIndex] || "?";
+  const designationText = new TextBlock(`designation_${team}_${loadoutIndex}`);
+  designationText.text = designation;
+  designationText.fontSize = 14;
+  designationText.fontWeight = "bold";
+  // Convert teamColor to hex
+  const tr = Math.round(teamColor.r * 255).toString(16).padStart(2, '0');
+  const tg = Math.round(teamColor.g * 255).toString(16).padStart(2, '0');
+  const tb = Math.round(teamColor.b * 255).toString(16).padStart(2, '0');
+  designationText.color = `#${tr}${tg}${tb}`;
+  designationText.outlineWidth = 2;
+  designationText.outlineColor = "black";
+  designationText.isVisible = false; // Hide until model is ready
+  gui.addControl(designationText);
+  designationText.linkWithMesh(hpBarAnchor);
+  designationText.linkOffsetY = -32; // Below the HP bar
+
   const originalColor = teamColor.clone();
 
   // Apply boost multipliers based on boost index
@@ -4815,6 +4934,7 @@ async function createUnit(
     healAmount: classData.healAmount,
     hpBar,
     hpBarBg,
+    designationLabel: designationText,
     originalColor,
     hasMoved: false,
     hasAttacked: false,
