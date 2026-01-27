@@ -3706,10 +3706,12 @@ export function createBattleScene(engine: Engine, canvas: HTMLCanvasElement, loa
       return result;
     }
 
-    // Clone accumulators for simulation
+    // Clone accumulators and speed bonuses for simulation
     const simAccumulators = new Map<Unit, number>();
+    const simSpeedBonuses = new Map<Unit, number>();
     for (const unit of aliveUnits) {
       simAccumulators.set(unit, unit.accumulator);
+      simSpeedBonuses.set(unit, unit.speedBonus);
     }
 
     // Track simulated "last acting team" for tie-breaking
@@ -3721,7 +3723,8 @@ export function createBattleScene(engine: Engine, canvas: HTMLCanvasElement, loa
       // Tick until someone is ready
       while (readyUnits.length === 0) {
         for (const unit of aliveUnits) {
-          const acc = (simAccumulators.get(unit) || 0) + getEffectiveSpeed(unit);
+          const simBonus = simSpeedBonuses.get(unit) || 0;
+          const acc = (simAccumulators.get(unit) || 0) + unit.speed + simBonus;
           simAccumulators.set(unit, acc);
           if (acc >= ACCUMULATOR_THRESHOLD) {
             readyUnits.push(unit);
@@ -3741,6 +3744,7 @@ export function createBattleScene(engine: Engine, canvas: HTMLCanvasElement, loa
       const nextUnit = readyUnits[0];
       result.push(nextUnit);
       simAccumulators.set(nextUnit, 0); // Reset after acting
+      simSpeedBonuses.set(nextUnit, 0); // Consume speed bonus after acting
       simLastTeam = nextUnit.team;
     }
 
@@ -3794,6 +3798,7 @@ export function createBattleScene(engine: Engine, canvas: HTMLCanvasElement, loa
   currentUnitStatusBar.top = "15px";
   currentUnitStatusBar.thickness = 0;
   currentUnitStatusBar.isVisible = false;
+  currentUnitStatusBar.zIndex = 10;
   gui.addControl(currentUnitStatusBar);
 
   // Status bar with three lines
@@ -3869,17 +3874,20 @@ export function createBattleScene(engine: Engine, canvas: HTMLCanvasElement, loa
   turnOrderBackdrop.thickness = 0;
   turnOrderBackdrop.isVisible = false;
   turnOrderBackdrop.zIndex = 100;
+  turnOrderBackdrop.isPointerBlocker = true;
   gui.addControl(turnOrderBackdrop);
 
   const turnOrderModal = new Rectangle("turnOrderModal");
   turnOrderModal.width = isTouch ? "280px" : "320px";
-  turnOrderModal.height = "400px";
+  const modalHeight = Math.min(400, screenHeight - 40);
+  turnOrderModal.height = `${modalHeight}px`;
   turnOrderModal.background = "#0a0a0a";
   turnOrderModal.cornerRadius = 12;
   turnOrderModal.thickness = 2;
   turnOrderModal.color = "#333333";
   turnOrderModal.isVisible = false;
   turnOrderModal.zIndex = 101;
+  turnOrderModal.isPointerBlocker = true;
   gui.addControl(turnOrderModal);
 
   // Modal header
@@ -3901,7 +3909,7 @@ export function createBattleScene(engine: Engine, canvas: HTMLCanvasElement, loa
   // Scrollable turn order list (drag to scroll, no visible scrollbar)
   const turnOrderScroll = new ScrollViewer("turnOrderScroll");
   turnOrderScroll.width = "100%";
-  turnOrderScroll.height = "340px";
+  turnOrderScroll.height = `${modalHeight - 60}px`;
   turnOrderScroll.top = "50px";
   turnOrderScroll.verticalAlignment = Control.VERTICAL_ALIGNMENT_TOP;
   turnOrderScroll.thickness = 0;
@@ -3914,12 +3922,45 @@ export function createBattleScene(engine: Engine, canvas: HTMLCanvasElement, loa
   turnOrderStack.paddingTop = "10px";
   turnOrderScroll.addControl(turnOrderStack);
 
+  // Custom drag-to-scroll for turn order modal (touch devices)
+  let modalDragging = false;
+  let modalLastY = 0;
+  scene.onPointerObservable.add((pointerInfo) => {
+    if (!turnOrderModal.isVisible) return;
+    const evt = pointerInfo.event;
+    if (pointerInfo.type === PointerEventTypes.POINTERDOWN) {
+      modalDragging = true;
+      modalLastY = evt.clientY;
+    }
+    if (pointerInfo.type === PointerEventTypes.POINTERUP) {
+      modalDragging = false;
+    }
+    if (pointerInfo.type === PointerEventTypes.POINTERMOVE && modalDragging) {
+      const deltaY = modalLastY - evt.clientY;
+      modalLastY = evt.clientY;
+      const contentHeight = turnOrderStack.heightInPixels;
+      const viewportHeight = turnOrderScroll.heightInPixels;
+      const maxScroll = contentHeight - viewportHeight;
+      if (maxScroll > 0) {
+        const scrollDelta = deltaY / maxScroll;
+        const newScroll = Math.max(0, Math.min(1, turnOrderScroll.verticalBar.value + scrollDelta));
+        turnOrderScroll.verticalBar.value = newScroll;
+      }
+    }
+  });
+
   // No-op: turn order info is now only shown in modal (hamburger button)
   function updateNextUpIndicator(): void {
     // Hamburger button doesn't show dynamic text
   }
 
+  let modalWasCameraAttached = false;
+
   function showTurnOrderModal(): void {
+    // Remember camera state and detach so touch doesn't move the map
+    modalWasCameraAttached = cameraMode === "rotate";
+    camera.detachControl();
+
     // Populate turn order list
     turnOrderStack.clearControls();
 
@@ -3943,6 +3984,10 @@ export function createBattleScene(engine: Engine, canvas: HTMLCanvasElement, loa
   function hideTurnOrderModal(): void {
     turnOrderBackdrop.isVisible = false;
     turnOrderModal.isVisible = false;
+    // Restore camera state from before modal opened
+    if (modalWasCameraAttached) {
+      camera.attachControl(true);
+    }
   }
 
   function createTurnOrderRow(unit: Unit, index: number, isCurrent: boolean): Rectangle {
@@ -3981,11 +4026,16 @@ export function createBattleScene(engine: Engine, canvas: HTMLCanvasElement, loa
     nameText.top = "-14px";
     row.addControl(nameText);
 
-    // Speed text
-    const speed = getEffectiveSpeed(unit).toFixed(1);
+    // Speed text (show bonus separately if present)
+    const baseSpd = unit.speed.toFixed(2);
     const speedText = new TextBlock(`speedText${index}`);
-    speedText.text = `Speed: ${speed}`;
-    speedText.color = "#888888";
+    if (unit.speedBonus > 0) {
+      speedText.text = `Speed: ${baseSpd} (+${unit.speedBonus.toFixed(2)} skip)`;
+      speedText.color = "#aad466"; // Greenish to highlight bonus
+    } else {
+      speedText.text = `Speed: ${baseSpd}`;
+      speedText.color = "#888888";
+    }
     speedText.fontSize = 11;
     speedText.textHorizontalAlignment = Control.HORIZONTAL_ALIGNMENT_LEFT;
     speedText.left = "20px";
@@ -4327,6 +4377,8 @@ export function createBattleScene(engine: Engine, canvas: HTMLCanvasElement, loa
   const queuedActionsStack = new StackPanel("queuedActionsStack");
   queuedActionsStack.isVertical = true;
   queuedActionsStack.verticalAlignment = Control.VERTICAL_ALIGNMENT_CENTER;
+  queuedActionsStack.paddingTop = "6px";
+  queuedActionsStack.paddingBottom = "6px";
   queuedActionsPanel.addControl(queuedActionsStack);
 
   gui.addControl(queuedActionsPanel);
@@ -4337,6 +4389,9 @@ export function createBattleScene(engine: Engine, canvas: HTMLCanvasElement, loa
     if (!currentUnit || !turnState || turnState.pendingActions.length === 0) {
       return;
     }
+
+    // Track cumulative HP changes across queued actions
+    const hpDeltas = new Map<Unit, number>();
 
     for (const action of turnState.pendingActions) {
       const actionLine = new TextBlock();
@@ -4352,17 +4407,21 @@ export function createBattleScene(engine: Engine, canvas: HTMLCanvasElement, loa
         const targetDesignation = UNIT_DESIGNATIONS[target.loadoutIndex] || "?";
         const targetClass = getClassData(target.unitClass).name;
         const damage = currentUnit.attack;
-        const newHp = Math.max(0, target.hp - damage);
-        actionLine.text = `${targetDesignation} ${targetClass} HP ${target.hp} → ${newHp}`;
+        const pendingHp = target.hp + (hpDeltas.get(target) || 0);
+        const newHp = Math.max(0, pendingHp - damage);
+        hpDeltas.set(target, (hpDeltas.get(target) || 0) + (newHp - pendingHp));
+        actionLine.text = `${targetDesignation} ${targetClass} HP ${pendingHp} → ${newHp}`;
         actionLine.color = "#ff6666"; // Red for attack
       } else if (action.type === "ability" && action.abilityName === "heal" && action.targetUnit) {
         const target = action.targetUnit;
         const targetDesignation = UNIT_DESIGNATIONS[target.loadoutIndex] || "?";
         const targetClass = getClassData(target.unitClass).name;
         const healAmt = currentUnit.healAmount;
-        const newHp = Math.min(target.maxHp, target.hp + healAmt);
+        const pendingHp = target.hp + (hpDeltas.get(target) || 0);
+        const newHp = Math.min(target.maxHp, pendingHp + healAmt);
+        hpDeltas.set(target, (hpDeltas.get(target) || 0) + (newHp - pendingHp));
         const name = target === currentUnit ? "Self" : `${targetDesignation} ${targetClass}`;
-        actionLine.text = `${name} HP ${target.hp} → ${newHp}`;
+        actionLine.text = `${name} HP ${pendingHp} → ${newHp}`;
         actionLine.color = "#66ff66"; // Green for heal
       } else if (action.type === "ability" && action.abilityName === "conceal") {
         actionLine.text = "Conceal";
@@ -4618,7 +4677,7 @@ export function createBattleScene(engine: Engine, canvas: HTMLCanvasElement, loa
     // Update unit header: designation + class + speed
     const classData = getClassData(currentUnit.unitClass);
     const designation = UNIT_DESIGNATIONS[currentUnit.loadoutIndex] || "?";
-    const speed = getEffectiveSpeed(currentUnit).toFixed(1);
+    const speed = getEffectiveSpeed(currentUnit).toFixed(2);
     menuUnitName.text = `${designation} ${classData.name}, Speed ${speed}`;
 
     // Update ability button from class data

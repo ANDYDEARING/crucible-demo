@@ -1612,18 +1612,27 @@ export function createLoadoutScene(
       mobileCanvas.height = mobileRttSize;
       const mobileCtx = mobileCanvas.getContext("2d")!;
 
-      // GUI Image for preview
+      // Mobile loading indicator
+      const mobileLoadingText = new TextBlock(`mobileLoadingText_${playerId}_${unitIndex}`);
+      mobileLoadingText.text = "Loading...";
+      mobileLoadingText.color = "#666666";
+      mobileLoadingText.fontSize = 11;
+      mobilePreviewContainer.addControl(mobileLoadingText);
+
+      // GUI Image for preview (hidden until model loads)
       mobilePreviewImage = new Image(`mobilePreviewImg_${playerId}_${unitIndex}`, "");
       mobilePreviewImage.stretch = Image.STRETCH_UNIFORM;
       mobilePreviewImage.width = "100%";
       mobilePreviewImage.height = "100%";
+      mobilePreviewImage.alpha = 0;
       mobilePreviewContainer.addControl(mobilePreviewImage);
 
       // Update canvas from RTT - continuously while tooltip is visible (for looping animation)
       let mobileFrameCount = 0;
+      let mobileModelLoaded = false;
       mobileRtt.onAfterRenderObservable.add(() => {
-        // Only update if tooltip is visible
-        if (!tooltipOverlay?.isVisible) return;
+        // Only update if tooltip is visible and model is loaded
+        if (!tooltipOverlay?.isVisible || !mobileModelLoaded) return;
 
         mobileFrameCount++;
         // Throttle to every 3rd frame
@@ -1646,6 +1655,10 @@ export function createLoadoutScene(
           }
           mobileCtx.putImageData(imageData, 0, 0);
           mobilePreviewImage.source = mobileCanvas.toDataURL();
+          if (mobilePreviewImage.alpha < 1) {
+            mobilePreviewImage.alpha = 1;
+            mobileLoadingText.isVisible = false;
+          }
         });
       });
 
@@ -1719,6 +1732,11 @@ export function createLoadoutScene(
           return;
         }
 
+        mobileModelLoaded = false;
+        if (mobilePreviewImage) {
+          mobilePreviewImage.alpha = 0;
+        }
+        mobileLoadingText.isVisible = true;
         if (mobilePreviewMesh) {
           if (mobileRtt.renderList) {
             mobileRtt.renderList.length = 0;
@@ -1746,6 +1764,7 @@ export function createLoadoutScene(
           });
 
           mobilePreviewAnims = result.animationGroups;
+          mobileModelLoaded = true;
           updateMobilePreviewAppearance();
         }).catch((err) => {
           console.warn("Failed to load mobile preview:", err);
@@ -1870,18 +1889,27 @@ export function createLoadoutScene(
       canvas.height = rttSize;
       const ctx = canvas.getContext("2d")!;
 
-      // GUI Image to display the preview
+      // Loading indicator (shown until model is ready)
+      const loadingText = new TextBlock(`loadingText_${playerId}_${unitIndex}`);
+      loadingText.text = "Loading...";
+      loadingText.color = "#666666";
+      loadingText.fontSize = 11;
+      previewContainer.addControl(loadingText);
+
+      // GUI Image to display the preview (hidden until model loads)
       const previewImage = new Image(`previewImg_${playerId}_${unitIndex}`, "");
       previewImage.stretch = Image.STRETCH_UNIFORM;
       previewImage.width = "100%";
       previewImage.height = "100%";
+      previewImage.alpha = 0;
       previewContainer.addControl(previewImage);
 
-      // Update canvas from RTT - only when dirty
+      // Update canvas from RTT - only when dirty and model is loaded
       let frameCount = 0;
       let previewDirty = 30; // Start dirty to render initial model
+      let previewModelLoaded = false;
       rtt.onAfterRenderObservable.add(() => {
-        if (previewDirty <= 0) return;
+        if (previewDirty <= 0 || !previewModelLoaded) return;
 
         frameCount++;
         if (frameCount % 2 !== 0) return;
@@ -1905,6 +1933,11 @@ export function createLoadoutScene(
           }
           ctx.putImageData(imageData, 0, 0);
           previewImage.source = canvas.toDataURL();
+          // Reveal preview and hide loading text on first frame
+          if (previewImage.alpha < 1) {
+            previewImage.alpha = 1;
+            loadingText.isVisible = false;
+          }
         });
       });
 
@@ -1992,6 +2025,9 @@ export function createLoadoutScene(
         }
 
         // Clean up existing model
+        previewModelLoaded = false;
+        previewImage.alpha = 0;
+        loadingText.isVisible = true;
         if (unitPreviewMesh) {
           if (rtt.renderList) {
             rtt.renderList.length = 0;
@@ -2021,6 +2057,7 @@ export function createLoadoutScene(
 
           // Store animations and update appearance
           unitPreviewAnims = result.animationGroups;
+          previewModelLoaded = true;
           updatePreviewAppearance();
         }).catch((err) => {
           console.warn("Failed to load unit preview:", err);
