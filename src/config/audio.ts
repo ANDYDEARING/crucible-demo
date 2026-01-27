@@ -9,15 +9,17 @@
 // MUSIC TRACKS
 // =============================================================================
 
+const BASE = import.meta.env.BASE_URL;
+
 export const MUSIC = {
   /** Title screen background music */
-  title: "/audio/rise_above_loop_v3.m4a",
+  title: `${BASE}audio/rise_above_loop_v3.m4a`,
 
   /** Loadout/team builder screen music */
-  loadout: "/audio/Loadout.m4a",
+  loadout: `${BASE}audio/Loadout.m4a`,
 
   /** Battle scene background music */
-  battle: "/audio/battle_v2.m4a",
+  battle: `${BASE}audio/battle_v2.m4a`,
 } as const;
 
 // =============================================================================
@@ -26,16 +28,16 @@ export const MUSIC = {
 
 export const SFX = {
   /** Light hit sound (for conceal break, light damage) */
-  hitLight: "/audio/effects/hit-light.flac",
+  hitLight: `${BASE}audio/effects/hit-light.flac`,
 
   /** Medium hit sound (for ranged attacks) */
-  hitMedium: "/audio/effects/hit-medium.flac",
+  hitMedium: `${BASE}audio/effects/hit-medium.flac`,
 
   /** Heavy hit sound (for melee attacks) */
-  hitHeavy: "/audio/effects/hit-heavy.flac",
+  hitHeavy: `${BASE}audio/effects/hit-heavy.flac`,
 
   /** Healing sound effect */
-  heal: "/audio/effects/Cure1.wav",
+  heal: `${BASE}audio/effects/Cure1.wav`,
 } as const;
 
 // =============================================================================

@@ -183,6 +183,7 @@ export function createTitleScene(
       titleLine1.color = `rgba(232, 196, 160, ${ease})`;
       titleLine2.color = `rgba(255, 179, 102, ${ease})`;
       divider.background = `rgba(255, 150, 80, ${ease * 0.4})`;
+      versionLabel.color = `rgba(180, 180, 180, ${ease})`;
       // Fade in mode buttons
       for (const btn of modeButtons) {
         btn.alpha = ease;
@@ -243,6 +244,16 @@ export function createTitleScene(
   divider.thickness = 0;
   divider.background = "rgba(255, 150, 80, 0)"; // Start invisible
   panel.addControl(divider);
+
+  // Version label
+  const versionLabel = new TextBlock();
+  versionLabel.text = "[ DEMO - Early - NOT BALANCED ]";
+  versionLabel.color = "rgba(180, 180, 180, 0)";
+  versionLabel.fontFamily = "'Exo 2', sans-serif";
+  versionLabel.fontSize = 11;
+  versionLabel.height = "30px";
+  versionLabel.paddingTop = "14px";
+  panel.addControl(versionLabel);
 
   // Spacer
   const spacer = new TextBlock();

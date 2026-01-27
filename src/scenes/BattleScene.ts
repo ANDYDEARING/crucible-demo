@@ -4074,17 +4074,20 @@ export function createBattleScene(engine: Engine, canvas: HTMLCanvasElement, loa
   let modalDragging = false;
   let modalLastY = 0;
 
-  const modalTouchStart = (e: TouchEvent) => {
-    if (!turnOrderModal.isVisible) return;
-    modalDragging = true;
-    modalLastY = e.touches[0].clientY;
-  };
+  function isInsideModal(clientX: number, clientY: number): boolean {
+    const modalCenterX = engine.getRenderWidth() / 2;
+    const modalCenterY = engine.getRenderHeight() / 2;
+    const modalW = turnOrderModal.widthInPixels;
+    const modalH = turnOrderModal.heightInPixels;
+    return (
+      clientX >= modalCenterX - modalW / 2 &&
+      clientX <= modalCenterX + modalW / 2 &&
+      clientY >= modalCenterY - modalH / 2 &&
+      clientY <= modalCenterY + modalH / 2
+    );
+  }
 
-  const modalTouchMove = (e: TouchEvent) => {
-    if (!modalDragging || !turnOrderModal.isVisible) return;
-    const touch = e.touches[0];
-    const deltaY = modalLastY - touch.clientY;
-    modalLastY = touch.clientY;
+  function applyScrollDelta(deltaY: number): void {
     const contentHeight = turnOrderStack.heightInPixels;
     const viewportHeight = turnOrderScroll.heightInPixels;
     const maxScroll = contentHeight - viewportHeight;
@@ -4093,6 +4096,21 @@ export function createBattleScene(engine: Engine, canvas: HTMLCanvasElement, loa
       const newScroll = Math.max(0, Math.min(1, turnOrderScroll.verticalBar.value + scrollDelta));
       turnOrderScroll.verticalBar.value = newScroll;
     }
+  }
+
+  // Touch handlers
+  const modalTouchStart = (e: TouchEvent) => {
+    if (!turnOrderModal.isVisible) return;
+    if (!isInsideModal(e.touches[0].clientX, e.touches[0].clientY)) return;
+    modalDragging = true;
+    modalLastY = e.touches[0].clientY;
+  };
+
+  const modalTouchMove = (e: TouchEvent) => {
+    if (!modalDragging || !turnOrderModal.isVisible) return;
+    const deltaY = modalLastY - e.touches[0].clientY;
+    modalLastY = e.touches[0].clientY;
+    applyScrollDelta(deltaY);
     e.preventDefault();
   };
 
@@ -4100,14 +4118,42 @@ export function createBattleScene(engine: Engine, canvas: HTMLCanvasElement, loa
     modalDragging = false;
   };
 
+  // Mouse handlers (desktop support)
+  const modalMouseDown = (e: MouseEvent) => {
+    if (!turnOrderModal.isVisible) return;
+    if (!isInsideModal(e.clientX, e.clientY)) return;
+    modalDragging = true;
+    modalLastY = e.clientY;
+  };
+
+  const modalMouseMove = (e: MouseEvent) => {
+    if (!modalDragging || !turnOrderModal.isVisible) return;
+    const deltaY = modalLastY - e.clientY;
+    modalLastY = e.clientY;
+    applyScrollDelta(deltaY);
+    e.preventDefault();
+  };
+
+  const modalMouseUp = () => {
+    modalDragging = false;
+  };
+
   window.addEventListener("touchstart", modalTouchStart, { passive: false });
   window.addEventListener("touchmove", modalTouchMove, { passive: false });
   window.addEventListener("touchend", modalTouchEnd);
+  window.addEventListener("touchcancel", modalTouchEnd);
+  window.addEventListener("mousedown", modalMouseDown);
+  window.addEventListener("mousemove", modalMouseMove);
+  window.addEventListener("mouseup", modalMouseUp);
 
   scene.onDisposeObservable.add(() => {
     window.removeEventListener("touchstart", modalTouchStart);
     window.removeEventListener("touchmove", modalTouchMove);
     window.removeEventListener("touchend", modalTouchEnd);
+    window.removeEventListener("touchcancel", modalTouchEnd);
+    window.removeEventListener("mousedown", modalMouseDown);
+    window.removeEventListener("mousemove", modalMouseMove);
+    window.removeEventListener("mouseup", modalMouseUp);
   });
 
   // No-op: turn order info is now only shown in modal (hamburger button)
@@ -4978,7 +5024,7 @@ async function createUnit(
   // Load 3D model
   const isMale = c.body === "male";
   const modelFile = getModelFileName(unitClass, isMale);
-  const result = await SceneLoader.ImportMeshAsync("", "/models/", modelFile, scene);
+  const result = await SceneLoader.ImportMeshAsync("", `${import.meta.env.BASE_URL}models/`, modelFile, scene);
 
   const modelRoot = result.meshes[0];
   const modelMeshes = result.meshes;

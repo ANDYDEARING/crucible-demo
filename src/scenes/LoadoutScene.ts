@@ -861,7 +861,7 @@ export function createLoadoutScene(
     editorPreviewAnimations.forEach(a => a.stop());
     editorPreviewAnimations = [];
 
-    const modelPath = `/models/${modelKey}.glb`;
+    const modelPath = `${import.meta.env.BASE_URL}models/${modelKey}.glb`;
     editorLoadedModelKey = modelKey;
 
     SceneLoader.ImportMeshAsync("", modelPath, "", scene).then((result) => {
@@ -1748,7 +1748,7 @@ export function createLoadoutScene(
         mobilePreviewAnims.forEach(a => a.stop());
         mobilePreviewAnims = [];
 
-        const modelPath = `/models/${modelKey}.glb`;
+        const modelPath = `${import.meta.env.BASE_URL}models/${modelKey}.glb`;
         mobileLoadedModelKey = modelKey;
 
         SceneLoader.ImportMeshAsync("", modelPath, "", scene).then((result) => {
@@ -2039,7 +2039,7 @@ export function createLoadoutScene(
         unitPreviewAnims.forEach(a => a.stop());
         unitPreviewAnims = [];
 
-        const modelPath = `/models/${modelKey}.glb`;
+        const modelPath = `${import.meta.env.BASE_URL}models/${modelKey}.glb`;
         loadedModelKey = modelKey;
 
         SceneLoader.ImportMeshAsync("", modelPath, "", scene).then((result) => {
