@@ -246,10 +246,15 @@ export function createLoadoutScene(
   gui.addControl(scrollViewer);
 
   // Custom drag-to-scroll implementation using scene-level events
+  // Note: appearanceOverlay is created later, so we reference it via closure
   let isDragging = false;
   let lastPointerY = 0;
+  let mainScrollOverlayCheck: (() => boolean) | null = null; // Set later after overlay is created
 
   scene.onPointerObservable.add((pointerInfo) => {
+    // Skip if an overlay is open (like appearance editor)
+    if (mainScrollOverlayCheck && mainScrollOverlayCheck()) return;
+
     const evt = pointerInfo.event;
 
     if (pointerInfo.type === PointerEventTypes.POINTERDOWN) {
@@ -833,6 +838,9 @@ export function createLoadoutScene(
   appearanceOverlay.isVisible = false;
   appearanceOverlay.zIndex = 500;
   gui.addControl(appearanceOverlay);
+
+  // Set the overlay check for main scroll (skips scrolling when editor is open)
+  mainScrollOverlayCheck = () => appearanceOverlay.isVisible;
 
   // Layout structure differs by device:
   // Mobile portrait: Sticky preview at top (35%), scrollable options below (65%)
@@ -1555,16 +1563,15 @@ export function createLoadoutScene(
       mobilePreviewImage.height = "100%";
       mobilePreviewContainer.addControl(mobilePreviewImage);
 
-      // Update canvas from RTT - only when dirty
+      // Update canvas from RTT - continuously while tooltip is visible (for looping animation)
       let mobileFrameCount = 0;
-      let mobilePreviewDirty = 30; // Start dirty to render initial model
       mobileRtt.onAfterRenderObservable.add(() => {
-        if (mobilePreviewDirty <= 0) return;
+        // Only update if tooltip is visible
+        if (!tooltipOverlay?.isVisible) return;
 
         mobileFrameCount++;
-        if (mobileFrameCount % 2 !== 0) return;
-
-        mobilePreviewDirty--;
+        // Throttle to every 3rd frame
+        if (mobileFrameCount % 3 !== 0) return;
 
         mobileRtt.readPixels()?.then((buffer) => {
           if (!buffer || !mobilePreviewImage) return;
@@ -1642,9 +1649,6 @@ export function createLoadoutScene(
         if (idleAnim) {
           idleAnim.start(true);
         }
-
-        // Mark preview as needing update
-        mobilePreviewDirty = 30;
       };
 
       // Load mobile preview model
