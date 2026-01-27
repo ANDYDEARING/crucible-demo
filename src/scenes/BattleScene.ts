@@ -3786,7 +3786,7 @@ export function createBattleScene(engine: Engine, canvas: HTMLCanvasElement, loa
   const statusBarWidth = Math.min(screenWidth - 160, 400);
   const currentUnitStatusBar = new Rectangle("currentUnitStatusBar");
   currentUnitStatusBar.width = `${statusBarWidth}px`;
-  currentUnitStatusBar.height = "44px";
+  currentUnitStatusBar.height = "58px";
   currentUnitStatusBar.background = "rgba(20, 20, 30, 0.8)";
   currentUnitStatusBar.cornerRadius = 8;
   currentUnitStatusBar.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_CENTER;
@@ -3796,40 +3796,35 @@ export function createBattleScene(engine: Engine, canvas: HTMLCanvasElement, loa
   currentUnitStatusBar.isVisible = false;
   gui.addControl(currentUnitStatusBar);
 
-  // Status bar with two lines
+  // Status bar with three lines
   const statusStack = new StackPanel("statusStack");
   statusStack.isVertical = true;
   currentUnitStatusBar.addControl(statusStack);
 
-  // Line 1: Symbol Class: Weapon
+  // Line 1: Symbol Class (team color)
   const statusLine1 = new TextBlock("statusLine1");
   statusLine1.text = "";
   statusLine1.fontSize = 12;
   statusLine1.fontWeight = "bold";
   statusLine1.color = "white";
-  statusLine1.height = "20px";
+  statusLine1.height = "18px";
   statusStack.addControl(statusLine1);
 
-  // Line 2: Boost | HP (HP in HP color)
-  const statusLine2Stack = new StackPanel("statusLine2Stack");
-  statusLine2Stack.isVertical = false;
-  statusLine2Stack.height = "18px";
-  statusLine2Stack.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_CENTER;
-  statusStack.addControl(statusLine2Stack);
+  // Line 2: [WEAPON] [BOOST] (white)
+  const statusLine2 = new TextBlock("statusLine2");
+  statusLine2.text = "";
+  statusLine2.fontSize = 11;
+  statusLine2.color = "white";
+  statusLine2.height = "18px";
+  statusStack.addControl(statusLine2);
 
-  const statusBoostText = new TextBlock("statusBoostText");
-  statusBoostText.text = "";
-  statusBoostText.fontSize = 11;
-  statusBoostText.color = "white";
-  statusBoostText.resizeToFit = true;
-  statusLine2Stack.addControl(statusBoostText);
-
+  // Line 3: HP (color-coded)
   const statusHpText = new TextBlock("statusHpText");
   statusHpText.text = "";
   statusHpText.fontSize = 11;
   statusHpText.color = HP_BAR_GREEN;
-  statusHpText.resizeToFit = true;
-  statusLine2Stack.addControl(statusHpText);
+  statusHpText.height = "18px";
+  statusStack.addControl(statusHpText);
 
   function getHpColor(unit: Unit): string {
     const hpPercent = unit.hp / unit.maxHp;
@@ -3846,18 +3841,20 @@ export function createBattleScene(engine: Engine, canvas: HTMLCanvasElement, loa
 
     const designation = UNIT_DESIGNATIONS[currentUnit.loadoutIndex] || "?";
     const className = getClassData(currentUnit.unitClass).name;
-    const weapon = currentUnit.customization?.combatStyle === "melee" ? "Melee" : "Ranged";
+    const weapon = currentUnit.customization?.combatStyle === "melee" ? "MELEE" : "RANGED";
     const boostData = BOOST_INFO[currentUnit.boost] || BOOST_INFO[0];
 
-    // Line 1: Symbol Class: Weapon in team color
-    statusLine1.text = `${designation} ${className}: ${weapon}`;
+    // Line 1: Symbol Class (team color)
+    statusLine1.text = `${designation} ${className}`;
     const r = Math.round(currentUnit.teamColor.r * 255).toString(16).padStart(2, '0');
     const g = Math.round(currentUnit.teamColor.g * 255).toString(16).padStart(2, '0');
     const b = Math.round(currentUnit.teamColor.b * 255).toString(16).padStart(2, '0');
     statusLine1.color = `#${r}${g}${b}`;
 
-    // Line 2: Boost | HP
-    statusBoostText.text = `${boostData.name} | `;
+    // Line 2: [WEAPON] [BOOST] (white)
+    statusLine2.text = `[${weapon}] [${boostData.name.toUpperCase()}]`;
+
+    // Line 3: HP (color-coded)
     statusHpText.text = `HP: ${currentUnit.hp}/${currentUnit.maxHp}`;
     statusHpText.color = getHpColor(currentUnit);
 
@@ -4246,7 +4243,7 @@ export function createBattleScene(engine: Engine, canvas: HTMLCanvasElement, loa
   }
 
   // ============================================
-  // ACTION COUNTER (Next to designation symbol)
+  // ACTION COUNTER (Below designation symbol)
   // ============================================
 
   const actionCounterText = new TextBlock("actionCounterText");
@@ -4295,9 +4292,9 @@ export function createBattleScene(engine: Engine, canvas: HTMLCanvasElement, loa
       camera.viewport.toGlobal(engine.getRenderWidth(), engine.getRenderHeight())
     );
 
-    // Position next to designation: offset X to the right by ~20px, same Y as designation (-32 offset)
-    actionCounterText.left = `${screenPos.x - engine.getRenderWidth() / 2 + 18}px`;
-    actionCounterText.top = `${screenPos.y - engine.getRenderHeight() / 2 - 32}px`;
+    // Position below designation symbol (centered, one line below)
+    actionCounterText.left = `${screenPos.x - engine.getRenderWidth() / 2}px`;
+    actionCounterText.top = `${screenPos.y - engine.getRenderHeight() / 2 + 5}px`;
     actionCounterText.isVisible = true;
   }
 
