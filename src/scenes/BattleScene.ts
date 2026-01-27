@@ -593,6 +593,15 @@ export function createBattleScene(engine: Engine, canvas: HTMLCanvasElement, loa
     controllerManager = createLocalPvPControllers();
   }
 
+  /** Get display name for a team (accounts for PvE) */
+  function getTeamDisplayName(team: Team): string {
+    if (loadout?.gameMode === "local-pve") {
+      const humanTeam = loadout.humanTeam || "player1";
+      return team === humanTeam ? "Player" : "Computer";
+    }
+    return team === "player1" ? "Player 1" : "Player 2";
+  }
+
   /** Create controller context for the current turn */
   function createControllerContext(unit: Unit): ControllerContext {
     return {
@@ -2691,11 +2700,11 @@ export function createBattleScene(engine: Engine, canvas: HTMLCanvasElement, loa
     if (player2Units.length === 0) {
       gameOver = true;
       controllerManager.notifyGameEnd("player1");
-      showGameOver(player1TeamColor, "Player 1");
+      showGameOver(player1TeamColor, getTeamDisplayName("player1"));
     } else if (player1Units.length === 0) {
       gameOver = true;
       controllerManager.notifyGameEnd("player2");
-      showGameOver(player2TeamColor, "Player 2");
+      showGameOver(player2TeamColor, getTeamDisplayName("player2"));
     }
   }
 
@@ -3126,7 +3135,7 @@ export function createBattleScene(engine: Engine, canvas: HTMLCanvasElement, loa
       // Apply damage (melee does more damage - using centralized multiplier)
       const isMeleeAttack = attacker.customization?.combatStyle === "melee";
       const damage = isMeleeAttack ? attacker.attack * MELEE_DAMAGE_MULTIPLIER : attacker.attack;
-      defender.hp -= damage;
+      defender.hp = Math.max(0, defender.hp - damage);
       console.log(`${attacker.team} ${attacker.unitClass} attacks ${defender.team} ${defender.unitClass} for ${damage} damage! (${defender.hp}/${defender.maxHp} HP)`);
 
       // Hit sounds based on weapon type
@@ -3690,34 +3699,43 @@ export function createBattleScene(engine: Engine, canvas: HTMLCanvasElement, loa
   // ============================================
 
   // Function to predict turn order without modifying actual state
-  function predictTurnOrder(count: number): Unit[] {
-    const result: Unit[] = [];
+  interface PredictedTurn {
+    unit: Unit;
+    speedBonus: number; // The speed bonus the unit had when reaching this turn
+  }
+
+  function predictTurnOrder(count: number): PredictedTurn[] {
+    const result: PredictedTurn[] = [];
     const aliveUnits = units.filter(u => u.hp > 0);
     if (aliveUnits.length === 0) return result;
 
-    // During first round, use the queue
+    // During first round, start with remaining queue entries
     if (isFirstRound && firstRoundQueue.length > 0) {
-      // Return remaining units in first round queue
-      for (let i = 0; i < Math.min(count, firstRoundQueue.length); i++) {
+      for (let i = 0; i < firstRoundQueue.length; i++) {
         if (firstRoundQueue[i].hp > 0) {
-          result.push(firstRoundQueue[i]);
+          result.push({ unit: firstRoundQueue[i], speedBonus: firstRoundQueue[i].speedBonus });
+          if (result.length >= count) return result;
         }
       }
-      return result;
+      // Fall through to accumulator prediction for remaining slots
     }
 
     // Clone accumulators and speed bonuses for simulation
     const simAccumulators = new Map<Unit, number>();
     const simSpeedBonuses = new Map<Unit, number>();
     for (const unit of aliveUnits) {
-      simAccumulators.set(unit, unit.accumulator);
-      simSpeedBonuses.set(unit, unit.speedBonus);
+      // If we consumed the first round queue above, all units start at 0
+      simAccumulators.set(unit, isFirstRound ? 0 : unit.accumulator);
+      simSpeedBonuses.set(unit, isFirstRound ? 0 : unit.speedBonus);
     }
 
     // Track simulated "last acting team" for tie-breaking
-    let simLastTeam: Team | null = lastActingTeam;
+    let simLastTeam: Team | null = isFirstRound
+      ? (firstRoundQueue.length > 0 ? firstRoundQueue[firstRoundQueue.length - 1].team : lastActingTeam)
+      : lastActingTeam;
 
-    for (let i = 0; i < count && aliveUnits.length > 0; i++) {
+    const remaining = count - result.length;
+    for (let i = 0; i < remaining && aliveUnits.length > 0; i++) {
       const readyUnits: Unit[] = [];
 
       // Tick until someone is ready
@@ -3742,7 +3760,7 @@ export function createBattleScene(engine: Engine, canvas: HTMLCanvasElement, loa
       });
 
       const nextUnit = readyUnits[0];
-      result.push(nextUnit);
+      result.push({ unit: nextUnit, speedBonus: simSpeedBonuses.get(nextUnit) || 0 });
       simAccumulators.set(nextUnit, 0); // Reset after acting
       simSpeedBonuses.set(nextUnit, 0); // Consume speed bonus after acting
       simLastTeam = nextUnit.team;
@@ -4044,10 +4062,10 @@ export function createBattleScene(engine: Engine, canvas: HTMLCanvasElement, loa
     // The forfeiting team is the current unit's team; the other team wins
     if (currentUnit && currentUnit.team === "player1") {
       controllerManager.notifyGameEnd("player2");
-      showGameOver(player2TeamColor, "Player 2");
+      showGameOver(player2TeamColor, getTeamDisplayName("player2"));
     } else {
       controllerManager.notifyGameEnd("player1");
-      showGameOver(player1TeamColor, "Player 1");
+      showGameOver(player1TeamColor, getTeamDisplayName("player1"));
     }
   });
 
@@ -4114,9 +4132,9 @@ export function createBattleScene(engine: Engine, canvas: HTMLCanvasElement, loa
     }
 
     // Predict next several turns
-    const predicted = predictTurnOrder(12); // Show up to 12 upcoming turns
+    const predicted = predictTurnOrder(6); // Show rolling 6 upcoming turns
     for (let i = 0; i < predicted.length; i++) {
-      const row = createTurnOrderRow(predicted[i], i + 1, false);
+      const row = createTurnOrderRow(predicted[i].unit, i + 1, false, predicted[i].speedBonus);
       turnOrderStack.addControl(row);
     }
 
@@ -4133,7 +4151,7 @@ export function createBattleScene(engine: Engine, canvas: HTMLCanvasElement, loa
     }
   }
 
-  function createTurnOrderRow(unit: Unit, index: number, isCurrent: boolean): Rectangle {
+  function createTurnOrderRow(unit: Unit, index: number, isCurrent: boolean, displaySpeedBonus?: number): Rectangle {
     const row = new Rectangle(`turnOrderRow${index}`);
     row.width = "100%";
     row.height = "58px";
@@ -4170,10 +4188,12 @@ export function createBattleScene(engine: Engine, canvas: HTMLCanvasElement, loa
     row.addControl(nameText);
 
     // Speed text (show bonus separately if present)
+    // Use provided displaySpeedBonus (from simulation) if available, otherwise unit's actual bonus
+    const bonus = displaySpeedBonus ?? unit.speedBonus;
     const baseSpd = unit.speed.toFixed(2);
     const speedText = new TextBlock(`speedText${index}`);
-    if (unit.speedBonus > 0) {
-      speedText.text = `Speed: ${baseSpd} (+${unit.speedBonus.toFixed(2)} skip)`;
+    if (bonus > 0) {
+      speedText.text = `Speed: ${baseSpd} (+${bonus.toFixed(2)} skip)`;
       speedText.color = "#aad466"; // Greenish to highlight bonus
     } else {
       speedText.text = `Speed: ${baseSpd}`;
@@ -4549,8 +4569,9 @@ export function createBattleScene(engine: Engine, canvas: HTMLCanvasElement, loa
         const target = action.targetUnit;
         const targetDesignation = UNIT_DESIGNATIONS[target.loadoutIndex] || "?";
         const targetClass = getClassData(target.unitClass).name;
-        const damage = currentUnit.attack;
-        const pendingHp = target.hp + (hpDeltas.get(target) || 0);
+        const isMelee = currentUnit.customization?.combatStyle === "melee";
+        const damage = isMelee ? currentUnit.attack * MELEE_DAMAGE_MULTIPLIER : currentUnit.attack;
+        const pendingHp = Math.max(0, Math.min(target.maxHp, target.hp + (hpDeltas.get(target) || 0)));
         const newHp = Math.max(0, pendingHp - damage);
         hpDeltas.set(target, (hpDeltas.get(target) || 0) + (newHp - pendingHp));
         actionLine.text = `${targetDesignation} ${targetClass} HP ${pendingHp} → ${newHp}`;
@@ -4560,7 +4581,7 @@ export function createBattleScene(engine: Engine, canvas: HTMLCanvasElement, loa
         const targetDesignation = UNIT_DESIGNATIONS[target.loadoutIndex] || "?";
         const targetClass = getClassData(target.unitClass).name;
         const healAmt = currentUnit.healAmount;
-        const pendingHp = target.hp + (hpDeltas.get(target) || 0);
+        const pendingHp = Math.max(0, Math.min(target.maxHp, target.hp + (hpDeltas.get(target) || 0)));
         const newHp = Math.min(target.maxHp, pendingHp + healAmt);
         hpDeltas.set(target, (hpDeltas.get(target) || 0) + (newHp - pendingHp));
         const name = target === currentUnit ? "Self" : `${targetDesignation} ${targetClass}`;
