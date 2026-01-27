@@ -230,6 +230,9 @@ export function createLoadoutScene(
   // Track callbacks to mark units as customized (called when appearance editor saves)
   const customizedMarkers: Record<string, () => void> = {};
 
+  // Track edit buttons for style reset when editor closes
+  const editButtonResetCallbacks: (() => void)[] = [];
+
   // ============================================
   // MAIN LAYOUT - Custom drag-to-scroll
   // ============================================
@@ -550,17 +553,15 @@ export function createLoadoutScene(
   const editorPreviewImage = new Image("editorPreviewImg", "");
   editorPreviewImage.stretch = Image.STRETCH_UNIFORM;
 
-  // Update canvas from RTT - only when dirty (model/appearance changed)
+  // Update canvas from RTT - continuously while editor is open (for looping animation)
   let editorFrameCount = 0;
-  let editorPreviewDirty = 0; // Counter: update for N frames after change, then stop
   editorRtt.onAfterRenderObservable.add(() => {
-    // Only update if editor is visible and preview is dirty
-    if (!appearanceOverlay.isVisible || editorPreviewDirty <= 0) return;
+    // Only update if editor is visible
+    if (!appearanceOverlay.isVisible) return;
 
     editorFrameCount++;
-    if (editorFrameCount % 2 !== 0) return;
-
-    editorPreviewDirty--;
+    // Throttle to every 3rd frame to reduce CPU while still showing smooth animation
+    if (editorFrameCount % 3 !== 0) return;
 
     editorRtt.readPixels()?.then((buffer) => {
       if (!buffer) return;
@@ -770,9 +771,6 @@ export function createLoadoutScene(
     if (idleAnim) {
       idleAnim.start(true);
     }
-
-    // Mark preview as needing update (update for 30 frames to catch animation settling)
-    editorPreviewDirty = 30;
   }
 
   // Load editor preview model
@@ -843,15 +841,19 @@ export function createLoadoutScene(
   overlayGrid.width = "100%";
   overlayGrid.height = "100%";
 
+  // Calculate options panel width - needs to fit 10 color swatches (26px each) + padding
+  // Swatches: 10 * 30px = 300px, plus side padding ~50px = 350px minimum
+  const optionsPanelWidth = isTablet ? 360 : 400; // px
+
   if (isMobile) {
     // Mobile portrait: preview on top (sticky), options scroll below
     overlayGrid.addColumnDefinition(1);
     overlayGrid.addRowDefinition(0.35); // Preview - sticky
     overlayGrid.addRowDefinition(0.65); // Options - scrollable
   } else {
-    // Tablet/Desktop: side by side
-    overlayGrid.addColumnDefinition(0.5); // Options
-    overlayGrid.addColumnDefinition(0.5); // Preview
+    // Tablet/Desktop: fixed-width options on left, preview takes remaining space
+    overlayGrid.addColumnDefinition(optionsPanelWidth, true); // Options - fixed pixels
+    overlayGrid.addColumnDefinition(1); // Preview - takes rest
     overlayGrid.addRowDefinition(1);
   }
   appearanceOverlay.addControl(overlayGrid);
@@ -1026,6 +1028,8 @@ export function createLoadoutScene(
         if (customizedMarkers[markerKey]) {
           customizedMarkers[markerKey]();
         }
+        // Refresh the loadout preview to show the new customization
+        previewRefreshCallbacks[playerId as "player1" | "player2"].forEach(cb => cb());
       }
     }
     closeAppearanceEditor();
@@ -1068,8 +1072,9 @@ export function createLoadoutScene(
     overlayGrid.addControl(previewArea, 0, 1);
   }
 
-  // For tablet/desktop: Use full height, crop sides to show center third of character
-  // Container clips the image to show only the middle portion
+  // For tablet/desktop: Inner container is a square sized by available height
+  // The square may overflow the outer container width, which clips the sides
+  // This gives the character maximum vertical space with cropped empty sides
   const previewClipContainer = new Rectangle("previewClip");
   previewClipContainer.thickness = 0;
   previewClipContainer.clipChildren = true;
@@ -1077,29 +1082,25 @@ export function createLoadoutScene(
   previewClipContainer.isHitTestVisible = false;
 
   if (isMobile) {
-    // Mobile: show full square preview, centered
-    previewClipContainer.width = "90%";
-    previewClipContainer.height = "90%";
+    // Mobile: show full square preview, centered within the top area
+    const mobilePreviewSize = Math.min(screenWidth * 0.9, screenHeight * 0.35 * 0.9);
+    previewClipContainer.width = `${mobilePreviewSize}px`;
+    previewClipContainer.height = `${mobilePreviewSize}px`;
   } else {
-    // Tablet/Desktop: full height, narrow width to crop sides
-    // Show center 40% of the square RTT (cuts 30% from each side)
-    previewClipContainer.height = "90%";
-    previewClipContainer.width = "36%"; // Narrow to show center portion
+    // Tablet/Desktop: Square sized by height, centered horizontally
+    // The outer container (previewArea) clips the horizontal overflow
+    const editorPreviewSize = screenHeight * 0.85; // Square based on screen height
+    previewClipContainer.width = `${editorPreviewSize}px`;
+    previewClipContainer.height = `${editorPreviewSize}px`;
   }
   previewArea.addControl(previewClipContainer);
 
-  // Preview image - stretched to fill container, overflow hidden
-  editorPreviewImage.isHitTestVisible = false; // Don't capture any pointer events
-  if (isMobile) {
-    editorPreviewImage.width = "100%";
-    editorPreviewImage.height = "100%";
-    editorPreviewImage.stretch = Image.STRETCH_UNIFORM;
-  } else {
-    // Make image taller than container so sides get cropped
-    editorPreviewImage.width = "280%"; // Wider than container
-    editorPreviewImage.height = "100%";
-    editorPreviewImage.stretch = Image.STRETCH_UNIFORM;
-  }
+  // Preview image fills the square container
+  editorPreviewImage.isHitTestVisible = false;
+  editorPreviewImage.width = "100%";
+  editorPreviewImage.height = "100%";
+  editorPreviewImage.stretch = Image.STRETCH_UNIFORM;
+
   previewClipContainer.addControl(editorPreviewImage);
 
   function openAppearanceEditor(playerId: string, unitIndex: number, selectionArray: UnitSelection[]): void {
@@ -1180,6 +1181,9 @@ export function createLoadoutScene(
   function closeAppearanceEditor(): void {
     appearanceOverlay.isVisible = false;
     editingUnit = null;
+
+    // Reset all edit button styles (in case hover state was stuck)
+    editButtonResetCallbacks.forEach(cb => cb());
 
     // Clean up editor preview model
     if (editorPreviewMesh) {
@@ -1412,6 +1416,12 @@ export function createLoadoutScene(
     });
     editBtn.onPointerClickObservable.add(() => {
       openAppearanceEditor(playerId, unitIndex, selectionArray);
+    });
+
+    // Register callback to reset button style when editor closes
+    editButtonResetCallbacks.push(() => {
+      editBtn.background = COLORS.bgButton;
+      editBtn.color = COLORS.borderWarm;
     });
 
     // === COLUMN 2: Copy text (single combined description) ===
