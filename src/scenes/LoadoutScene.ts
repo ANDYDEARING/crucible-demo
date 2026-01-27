@@ -24,7 +24,7 @@ import {
   ScrollViewer,
   Image,
 } from "@babylonjs/gui";
-import { ALL_CLASSES, getClassData, Loadout, UnitSelection, UnitClass, UnitCustomization } from "../types";
+import { ALL_CLASSES, getClassData, Loadout, UnitSelection, UnitClass, UnitCustomization, SceneName } from "../types";
 import { getGameMode } from "../main";
 
 // Import centralized config
@@ -42,6 +42,9 @@ import { MUSIC, AUDIO_VOLUMES, LOOP_BUFFER_TIME, DEBUG_SKIP_OFFSET } from "../co
 import { createMusicPlayer, hexToColor3, hexToColor4 } from "../utils";
 
 // ============================================
+// Module-level music player (persists across orientation reloads)
+let loadoutMusic: HTMLAudioElement | null = null;
+
 // COLOR PALETTE (matches title screen aesthetic)
 // ============================================
 const COLORS = {
@@ -142,7 +145,8 @@ function getUnitDescription(unitClass: UnitClass, boostIndex: number, weaponStyl
 export function createLoadoutScene(
   engine: Engine,
   _canvas: HTMLCanvasElement,
-  onStartBattle: (loadout: Loadout) => void
+  onStartBattle: (loadout: Loadout) => void,
+  navigateTo: (scene: SceneName) => void
 ): Scene {
   const scene = new Scene(engine);
 
@@ -171,15 +175,51 @@ export function createLoadoutScene(
   const panelWidth = isMobile ? "98%" : isTablet ? "94%" : "85%";
   const isDesktop = screenWidth >= 1024;
 
-  // Loadout music
-  const music = createMusicPlayer(MUSIC.loadout, AUDIO_VOLUMES.music, true, LOOP_BUFFER_TIME);
-  music.play();
+  // Listen for orientation/resize changes and reload scene
+  const initialOrientation = screenWidth > screenHeight ? "landscape" : "portrait";
+  let reloadPending = false;
+  let isOrientationReload = false; // Flag to preserve music during reload
+
+  const handleResize = () => {
+    if (reloadPending) return;
+
+    const newWidth = engine.getRenderWidth();
+    const newHeight = engine.getRenderHeight();
+    const newOrientation = newWidth > newHeight ? "landscape" : "portrait";
+
+    // Reload if orientation changed or significant size change (>100px in either dimension)
+    const orientationChanged = newOrientation !== initialOrientation;
+    const significantResize = Math.abs(newWidth - screenWidth) > 100 || Math.abs(newHeight - screenHeight) > 100;
+
+    if (orientationChanged || significantResize) {
+      reloadPending = true;
+      isOrientationReload = true; // Preserve music during this reload
+      // Small delay to let the resize settle
+      setTimeout(() => {
+        navigateTo("loadout");
+      }, 100);
+    }
+  };
+
+  window.addEventListener("resize", handleResize);
+  window.addEventListener("orientationchange", handleResize);
+
+  scene.onDisposeObservable.add(() => {
+    window.removeEventListener("resize", handleResize);
+    window.removeEventListener("orientationchange", handleResize);
+  });
+
+  // Loadout music - reuse existing player if already playing (for orientation reloads)
+  if (!loadoutMusic) {
+    loadoutMusic = createMusicPlayer(MUSIC.loadout, AUDIO_VOLUMES.music, true, LOOP_BUFFER_TIME);
+    loadoutMusic.play();
+  }
 
   // Debug skip key
   const skipHandler = (e: KeyboardEvent) => {
     if (e.key === "s" || e.key === "S") {
-      if (music.duration) {
-        music.currentTime = Math.max(0, music.duration - DEBUG_SKIP_OFFSET);
+      if (loadoutMusic?.duration) {
+        loadoutMusic.currentTime = Math.max(0, loadoutMusic.duration - DEBUG_SKIP_OFFSET);
       }
     }
   };
@@ -188,9 +228,13 @@ export function createLoadoutScene(
     window.removeEventListener("keydown", skipHandler);
   });
 
+  // Only stop music when navigating away (not on orientation reload)
   scene.onDisposeObservable.add(() => {
-    music.pause();
-    music.src = "";
+    if (!isOrientationReload && loadoutMusic) {
+      loadoutMusic.pause();
+      loadoutMusic.src = "";
+      loadoutMusic = null;
+    }
   });
 
   // Camera setup for 3D preview
@@ -223,6 +267,12 @@ export function createLoadoutScene(
 
   // Track preview refresh callbacks (called when team color changes)
   const previewRefreshCallbacks: { player1: (() => void)[]; player2: (() => void)[] } = {
+    player1: [],
+    player2: [],
+  };
+
+  // Track preview reload callbacks (called when gender changes - reloads model if needed)
+  const previewReloadCallbacks: { player1: (() => void)[]; player2: (() => void)[] } = {
     player1: [],
     player2: [],
   };
@@ -1036,8 +1086,8 @@ export function createLoadoutScene(
         if (customizedMarkers[markerKey]) {
           customizedMarkers[markerKey]();
         }
-        // Refresh the loadout preview to show the new customization
-        previewRefreshCallbacks[playerId as "player1" | "player2"].forEach(cb => cb());
+        // Reload the loadout preview (handles model reload for gender changes)
+        previewReloadCallbacks[playerId as "player1" | "player2"].forEach(cb => cb());
       }
     }
     closeAppearanceEditor();
@@ -1699,6 +1749,9 @@ export function createLoadoutScene(
       // Register for team color changes
       previewRefreshCallbacks[playerId as "player1" | "player2"].push(updateMobilePreviewAppearance);
 
+      // Register for model reloads (e.g., gender change)
+      previewReloadCallbacks[playerId as "player1" | "player2"].push(loadMobilePreview);
+
       // Note: Initial load happens via updateCopy() at end of createUnitRow
 
       // Spacer between preview and text
@@ -1970,6 +2023,9 @@ export function createLoadoutScene(
 
       // Register callback for team color changes
       previewRefreshCallbacks[playerId as "player1" | "player2"].push(updatePreviewAppearance);
+
+      // Register for model reloads (e.g., gender change)
+      previewReloadCallbacks[playerId as "player1" | "player2"].push(loadUnitPreview);
 
       // Note: Initial load happens via updateCopy() at end of createUnitRow
     }
