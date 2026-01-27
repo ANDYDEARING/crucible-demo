@@ -82,6 +82,7 @@ import {
   ACCUMULATOR_THRESHOLD,
   SPEED_BONUS_PER_UNUSED_ACTION,
   MELEE_DAMAGE_MULTIPLIER,
+  BOOST_MULTIPLIER,
   HP_LOW_THRESHOLD,
   HP_MEDIUM_THRESHOLD,
   BATTLE_MODEL_SCALE,
@@ -2037,6 +2038,9 @@ export function createBattleScene(engine: Engine, canvas: HTMLCanvasElement, loa
     // Always clear target arrays to prevent stale data
     attackableUnits = [];
     healableUnits = [];
+
+    // Always update action buttons (even if no actions remain)
+    updateActionButtons();
 
     if (!hasActionsRemaining()) return;
 
@@ -4843,6 +4847,17 @@ async function createUnit(
 
   const originalColor = teamColor.clone();
 
+  // Apply boost multipliers based on boost index
+  // boost 0 = HP, boost 1 = Damage, boost 2 = Speed
+  const boostIndex = boost ?? 0;
+  const hpMultiplier = boostIndex === 0 ? 1 + BOOST_MULTIPLIER : 1;
+  const attackMultiplier = boostIndex === 1 ? 1 + BOOST_MULTIPLIER : 1;
+  const speedMultiplier = boostIndex === 2 ? 1 + BOOST_MULTIPLIER : 1;
+
+  const boostedHp = Math.round(classData.hp * hpMultiplier);
+  const boostedAttack = Math.round(classData.attack * attackMultiplier);
+  const boostedSpeed = 1 * speedMultiplier;
+
   return {
     mesh: hpBarAnchor,  // Use anchor as the main "mesh" for positioning
     unitClass,
@@ -4851,16 +4866,16 @@ async function createUnit(
     gridZ,
     moveRange: classData.moveRange,
     attackRange: classData.attackRange,
-    hp: classData.hp,
-    maxHp: classData.hp,
-    attack: classData.attack,
+    hp: boostedHp,
+    maxHp: boostedHp,
+    attack: boostedAttack,
     healAmount: classData.healAmount,
     hpBar,
     hpBarBg,
     originalColor,
     hasMoved: false,
     hasAttacked: false,
-    speed: 1,
+    speed: boostedSpeed,
     speedBonus: 0,
     accumulator: 0,
     loadoutIndex,
