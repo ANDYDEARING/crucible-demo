@@ -2707,7 +2707,7 @@ export function createBattleScene(engine: Engine, canvas: HTMLCanvasElement, loa
     gui.addControl(overlay);
 
     const container = new StackPanel();
-    container.width = "600px";
+    container.width = screenWidth < 500 ? "95%" : "600px";
     container.height = "200px";
     overlay.addControl(container);
 
@@ -2720,7 +2720,7 @@ export function createBattleScene(engine: Engine, canvas: HTMLCanvasElement, loa
     const text = new TextBlock();
     text.text = `${winnerName} Wins!`;
     text.color = colorHex;
-    text.fontSize = 72;
+    text.fontSize = screenWidth < 500 ? 48 : 72;
     text.width = "100%";
     text.height = "100px";
     text.fontWeight = "bold";
@@ -3909,7 +3909,7 @@ export function createBattleScene(engine: Engine, canvas: HTMLCanvasElement, loa
   // Scrollable turn order list (drag to scroll, no visible scrollbar)
   const turnOrderScroll = new ScrollViewer("turnOrderScroll");
   turnOrderScroll.width = "100%";
-  turnOrderScroll.height = `${modalHeight - 60}px`;
+  turnOrderScroll.height = `${modalHeight - 110}px`;
   turnOrderScroll.top = "50px";
   turnOrderScroll.verticalAlignment = Control.VERTICAL_ALIGNMENT_TOP;
   turnOrderScroll.thickness = 0;
@@ -3922,31 +3922,174 @@ export function createBattleScene(engine: Engine, canvas: HTMLCanvasElement, loa
   turnOrderStack.paddingTop = "10px";
   turnOrderScroll.addControl(turnOrderStack);
 
-  // Custom drag-to-scroll for turn order modal (touch devices)
+  // Forfeit button footer
+  const forfeitFooter = new Rectangle("forfeitFooter");
+  forfeitFooter.width = "100%";
+  forfeitFooter.height = "50px";
+  forfeitFooter.background = "#151515";
+  forfeitFooter.thickness = 0;
+  forfeitFooter.verticalAlignment = Control.VERTICAL_ALIGNMENT_BOTTOM;
+  turnOrderModal.addControl(forfeitFooter);
+
+  const forfeitBtn = Button.CreateSimpleButton("forfeitBtn", "Forfeit");
+  forfeitBtn.width = "120px";
+  forfeitBtn.height = "34px";
+  forfeitBtn.background = "#552222";
+  forfeitBtn.color = "#ff6666";
+  forfeitBtn.cornerRadius = 6;
+  forfeitBtn.fontSize = 14;
+  forfeitBtn.fontWeight = "bold";
+  forfeitBtn.isPointerBlocker = true;
+  forfeitBtn.zIndex = 50;
+  forfeitFooter.addControl(forfeitBtn);
+
+  // Forfeit confirmation modal
+  const forfeitConfirmBackdrop = new Rectangle("forfeitConfirmBackdrop");
+  forfeitConfirmBackdrop.width = "100%";
+  forfeitConfirmBackdrop.height = "100%";
+  forfeitConfirmBackdrop.background = "rgba(0, 0, 0, 0.8)";
+  forfeitConfirmBackdrop.thickness = 0;
+  forfeitConfirmBackdrop.isVisible = false;
+  forfeitConfirmBackdrop.zIndex = 200;
+  forfeitConfirmBackdrop.isPointerBlocker = true;
+  gui.addControl(forfeitConfirmBackdrop);
+
+  const forfeitConfirmPanel = new Rectangle("forfeitConfirmPanel");
+  forfeitConfirmPanel.width = isTouch ? "260px" : "300px";
+  forfeitConfirmPanel.height = "160px";
+  forfeitConfirmPanel.background = "#0a0a0a";
+  forfeitConfirmPanel.cornerRadius = 12;
+  forfeitConfirmPanel.thickness = 2;
+  forfeitConfirmPanel.color = "#552222";
+  forfeitConfirmPanel.zIndex = 201;
+  forfeitConfirmPanel.isVisible = false;
+  forfeitConfirmPanel.isPointerBlocker = true;
+  gui.addControl(forfeitConfirmPanel);
+
+  const forfeitConfirmStack = new StackPanel("forfeitConfirmStack");
+  forfeitConfirmStack.isVertical = true;
+  forfeitConfirmStack.width = "100%";
+  forfeitConfirmPanel.addControl(forfeitConfirmStack);
+
+  const forfeitConfirmTitle = new TextBlock("forfeitConfirmTitle");
+  forfeitConfirmTitle.text = "Forfeit Match?";
+  forfeitConfirmTitle.color = "#ff6666";
+  forfeitConfirmTitle.fontSize = 18;
+  forfeitConfirmTitle.fontWeight = "bold";
+  forfeitConfirmTitle.height = "40px";
+  forfeitConfirmStack.addControl(forfeitConfirmTitle);
+
+  const forfeitConfirmMsg = new TextBlock("forfeitConfirmMsg");
+  forfeitConfirmMsg.text = "This will end the match.";
+  forfeitConfirmMsg.color = "#aaaaaa";
+  forfeitConfirmMsg.fontSize = 13;
+  forfeitConfirmMsg.height = "30px";
+  forfeitConfirmStack.addControl(forfeitConfirmMsg);
+
+  const forfeitBtnRow = new StackPanel("forfeitBtnRow");
+  forfeitBtnRow.isVertical = false;
+  forfeitBtnRow.height = "50px";
+  forfeitBtnRow.width = "220px";
+  forfeitConfirmStack.addControl(forfeitBtnRow);
+
+  const forfeitCancelBtn = Button.CreateSimpleButton("forfeitCancelBtn", "Cancel");
+  forfeitCancelBtn.width = "100px";
+  forfeitCancelBtn.height = "36px";
+  forfeitCancelBtn.background = "#333333";
+  forfeitCancelBtn.color = "white";
+  forfeitCancelBtn.cornerRadius = 6;
+  forfeitCancelBtn.fontSize = 14;
+  forfeitCancelBtn.isPointerBlocker = true;
+  forfeitBtnRow.addControl(forfeitCancelBtn);
+
+  // Spacer
+  const forfeitBtnSpacer = new Rectangle("forfeitBtnSpacer");
+  forfeitBtnSpacer.width = "20px";
+  forfeitBtnSpacer.height = "1px";
+  forfeitBtnSpacer.thickness = 0;
+  forfeitBtnRow.addControl(forfeitBtnSpacer);
+
+  const forfeitConfirmBtn = Button.CreateSimpleButton("forfeitConfirmBtn", "Forfeit");
+  forfeitConfirmBtn.width = "100px";
+  forfeitConfirmBtn.height = "36px";
+  forfeitConfirmBtn.background = "#882222";
+  forfeitConfirmBtn.color = "#ff6666";
+  forfeitConfirmBtn.cornerRadius = 6;
+  forfeitConfirmBtn.fontSize = 14;
+  forfeitConfirmBtn.fontWeight = "bold";
+  forfeitConfirmBtn.isPointerBlocker = true;
+  forfeitBtnRow.addControl(forfeitConfirmBtn);
+
+  // Forfeit button handlers
+  forfeitBtn.onPointerUpObservable.add(() => {
+    hideTurnOrderModal();
+    forfeitConfirmBackdrop.isVisible = true;
+    forfeitConfirmPanel.isVisible = true;
+  });
+
+  forfeitCancelBtn.onPointerUpObservable.add(() => {
+    forfeitConfirmBackdrop.isVisible = false;
+    forfeitConfirmPanel.isVisible = false;
+  });
+
+  forfeitConfirmBackdrop.onPointerClickObservable.add(() => {
+    forfeitConfirmBackdrop.isVisible = false;
+    forfeitConfirmPanel.isVisible = false;
+  });
+
+  forfeitConfirmBtn.onPointerUpObservable.add(() => {
+    forfeitConfirmBackdrop.isVisible = false;
+    forfeitConfirmPanel.isVisible = false;
+    gameOver = true;
+    // The forfeiting team is the current unit's team; the other team wins
+    if (currentUnit && currentUnit.team === "player1") {
+      controllerManager.notifyGameEnd("player2");
+      showGameOver(player2TeamColor, "Player 2");
+    } else {
+      controllerManager.notifyGameEnd("player1");
+      showGameOver(player1TeamColor, "Player 1");
+    }
+  });
+
+  // Custom drag-to-scroll for turn order modal using window events
+  // (scene.onPointerObservable is blocked by GUI's isPointerBlocker)
   let modalDragging = false;
   let modalLastY = 0;
-  scene.onPointerObservable.add((pointerInfo) => {
+
+  const modalTouchStart = (e: TouchEvent) => {
     if (!turnOrderModal.isVisible) return;
-    const evt = pointerInfo.event;
-    if (pointerInfo.type === PointerEventTypes.POINTERDOWN) {
-      modalDragging = true;
-      modalLastY = evt.clientY;
+    modalDragging = true;
+    modalLastY = e.touches[0].clientY;
+  };
+
+  const modalTouchMove = (e: TouchEvent) => {
+    if (!modalDragging || !turnOrderModal.isVisible) return;
+    const touch = e.touches[0];
+    const deltaY = modalLastY - touch.clientY;
+    modalLastY = touch.clientY;
+    const contentHeight = turnOrderStack.heightInPixels;
+    const viewportHeight = turnOrderScroll.heightInPixels;
+    const maxScroll = contentHeight - viewportHeight;
+    if (maxScroll > 0) {
+      const scrollDelta = deltaY / maxScroll;
+      const newScroll = Math.max(0, Math.min(1, turnOrderScroll.verticalBar.value + scrollDelta));
+      turnOrderScroll.verticalBar.value = newScroll;
     }
-    if (pointerInfo.type === PointerEventTypes.POINTERUP) {
-      modalDragging = false;
-    }
-    if (pointerInfo.type === PointerEventTypes.POINTERMOVE && modalDragging) {
-      const deltaY = modalLastY - evt.clientY;
-      modalLastY = evt.clientY;
-      const contentHeight = turnOrderStack.heightInPixels;
-      const viewportHeight = turnOrderScroll.heightInPixels;
-      const maxScroll = contentHeight - viewportHeight;
-      if (maxScroll > 0) {
-        const scrollDelta = deltaY / maxScroll;
-        const newScroll = Math.max(0, Math.min(1, turnOrderScroll.verticalBar.value + scrollDelta));
-        turnOrderScroll.verticalBar.value = newScroll;
-      }
-    }
+    e.preventDefault();
+  };
+
+  const modalTouchEnd = () => {
+    modalDragging = false;
+  };
+
+  window.addEventListener("touchstart", modalTouchStart, { passive: false });
+  window.addEventListener("touchmove", modalTouchMove, { passive: false });
+  window.addEventListener("touchend", modalTouchEnd);
+
+  scene.onDisposeObservable.add(() => {
+    window.removeEventListener("touchstart", modalTouchStart);
+    window.removeEventListener("touchmove", modalTouchMove);
+    window.removeEventListener("touchend", modalTouchEnd);
   });
 
   // No-op: turn order info is now only shown in modal (hamburger button)
