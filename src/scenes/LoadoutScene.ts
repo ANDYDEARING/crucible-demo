@@ -12,6 +12,7 @@ import {
   AnimationGroup,
   PointerEventTypes,
   RenderTargetTexture,
+  PBRMaterial,
 } from "@babylonjs/core";
 import "@babylonjs/loaders/glTF";
 import {
@@ -40,7 +41,7 @@ import {
   EYE_COLORS,
 } from "../config";
 import { MUSIC, AUDIO_VOLUMES, LOOP_BUFFER_TIME, DEBUG_SKIP_OFFSET } from "../config";
-import { createMusicPlayer } from "../utils";
+import { createMusicPlayer, hexToColor3 } from "../utils";
 
 // ============================================
 // COLOR PALETTE (matches title screen aesthetic)
@@ -178,6 +179,12 @@ export function createLoadoutScene(
 
   // Track team color refresh callbacks
   const teamColorRefreshCallbacks: { player1?: () => void; player2?: () => void } = {};
+
+  // Track preview refresh callbacks (called when team color changes)
+  const previewRefreshCallbacks: { player1: (() => void)[]; player2: (() => void)[] } = {
+    player1: [],
+    player2: [],
+  };
 
   // ============================================
   // MAIN LAYOUT - Custom drag-to-scroll
@@ -399,6 +406,9 @@ export function createLoadoutScene(
         refreshColorSwatches();
         panel.color = teamColor.hex;
         nameText.color = teamColor.hex;
+
+        // Refresh previews for this player's units
+        previewRefreshCallbacks[playerId].forEach(cb => cb());
 
         const otherPlayerId = playerId === "player1" ? "player2" : "player1";
         teamColorRefreshCallbacks[otherPlayerId]?.();
@@ -1346,27 +1356,89 @@ export function createLoadoutScene(
         });
       });
 
-      // Load preview model
+      // Track what model is currently loaded
+      let loadedModelKey = "";
+      let unitPreviewMeshes: AbstractMesh[] = [];
+
+      // Update preview appearance without reloading model
+      const updatePreviewAppearance = (): void => {
+        if (unitPreviewMeshes.length === 0) return;
+
+        const customization = selectionArray[unitIndex]?.customization;
+        const headIndex = customization?.head ?? 0;
+        const isMelee = selectedStyle === "melee";
+
+        // Get team color
+        const teamColorHex = playerId === "player1"
+          ? selections.player1TeamColor
+          : selections.player2TeamColor;
+        const teamColor = hexToColor3(teamColorHex || "#ff0000");
+
+        unitPreviewMeshes.forEach(m => {
+          // Apply team color to TeamMain material
+          if (m.material && m.material.name === "TeamMain") {
+            const mat = m.material as PBRMaterial;
+            mat.albedoColor = teamColor;
+          }
+
+          // Hide all heads except selected one (Head_001 through Head_004)
+          for (let i = 0; i < 4; i++) {
+            const headName = `Head_00${i + 1}`;
+            if (m.name.includes(headName)) {
+              m.setEnabled(i === headIndex);
+            }
+          }
+
+          // Show sword or pistol based on combat style
+          const meshNameLower = m.name.toLowerCase();
+          if (meshNameLower.includes("sword")) {
+            m.setEnabled(isMelee);
+          } else if (meshNameLower.includes("pistol")) {
+            m.setEnabled(!isMelee);
+          }
+        });
+
+        // Play correct idle animation based on combat style
+        unitPreviewAnims.forEach(ag => ag.stop());
+        const idleAnim = isMelee
+          ? unitPreviewAnims.find(ag => ag.name === "Idle_Sword")
+          : unitPreviewAnims.find(ag => ag.name === "Idle_Gun");
+        if (idleAnim) {
+          idleAnim.start(true);
+        }
+      };
+
+      // Load preview model (only when class or body changes)
       loadUnitPreview = (): void => {
-        // Clean up existing
+        const classData = getClassData(selectedClass);
+        const body = selectionArray[unitIndex]?.customization?.body || "male";
+        const gender = body === "male" ? "m" : "f";
+        const modelKey = `${classData.modelFile}_${gender}`;
+
+        // If same model is already loaded, just update appearance
+        if (modelKey === loadedModelKey && unitPreviewMesh) {
+          updatePreviewAppearance();
+          return;
+        }
+
+        // Clean up existing model
         if (unitPreviewMesh) {
-          // Remove from RTT render list
           if (rtt.renderList) {
             rtt.renderList.length = 0;
           }
           unitPreviewMesh.dispose();
           unitPreviewMesh = null;
+          unitPreviewMeshes = [];
         }
         unitPreviewAnims.forEach(a => a.stop());
         unitPreviewAnims = [];
 
-        const classData = getClassData(selectedClass);
-        const body = selectionArray[unitIndex]?.customization?.body || "male";
-        const gender = body === "male" ? "m" : "f";
-        const modelPath = `/models/${classData.modelFile}_${gender}.glb`;
+        const modelPath = `/models/${modelKey}.glb`;
+        loadedModelKey = modelKey;
 
         SceneLoader.ImportMeshAsync("", modelPath, "", scene).then((result) => {
           unitPreviewMesh = result.meshes[0];
+          unitPreviewMeshes = result.meshes;
           unitPreviewMesh.position = new Vector3(0, 0, 0);
           unitPreviewMesh.scaling = new Vector3(0.9, 0.9, 0.9);
           unitPreviewMesh.rotation = new Vector3(0, Math.PI * 0.15, 0);
@@ -1377,16 +1449,16 @@ export function createLoadoutScene(
             rtt.renderList?.push(m);
           });
 
-          // Play idle animation
+          // Store animations and update appearance
           unitPreviewAnims = result.animationGroups;
-          const idle = unitPreviewAnims.find(a => a.name.toLowerCase().includes("idle"));
-          if (idle) {
-            idle.start(true);
-          }
+          updatePreviewAppearance();
         }).catch((err) => {
           console.warn("Failed to load unit preview:", err);
         });
       };
+
+      // Register callback for team color changes
+      previewRefreshCallbacks[playerId as "player1" | "player2"].push(updatePreviewAppearance);
 
       // Load initial preview
       loadUnitPreview();
