@@ -2025,6 +2025,85 @@ export function createBattleScene(engine: Engine, canvas: HTMLCanvasElement, loa
     }
   }
 
+  // ============================================
+  // UNIFIED ACTION HIGHLIGHTING (Mobile-friendly UI)
+  // Shows all available actions at once: moves, attacks, and self-ability
+  // ============================================
+
+  function highlightAllAvailableActions(unit: Unit): void {
+    clearHighlights();
+
+    // Always clear target arrays to prevent stale data
+    attackableUnits = [];
+    healableUnits = [];
+
+    if (!hasActionsRemaining()) return;
+
+    // Use shadow position if there's a pending move, otherwise current position
+    const effectiveX = shadowPosition?.x ?? unit.gridX;
+    const effectiveZ = shadowPosition?.z ?? unit.gridZ;
+
+    // 1. Highlight valid move tiles (blue)
+    const validTiles = getValidMoveTiles(unit, effectiveX, effectiveZ);
+    for (const { x, z } of validTiles) {
+      const tile = tiles[x][z];
+      tile.material = validMoveMaterial;
+      highlightedTiles.push(tile);
+    }
+
+    // 2. Highlight attackable enemies (red)
+    const attackTiles = getValidAttackTiles(unit, effectiveX, effectiveZ);
+
+    for (const enemy of units) {
+      if (enemy.team === unit.team) continue;
+      if (enemy.hp <= 0) continue;
+
+      const tileInfo = attackTiles.find(t => t.x === enemy.gridX && t.z === enemy.gridZ);
+      if (tileInfo?.hasLOS) {
+        const tile = tiles[enemy.gridX][enemy.gridZ];
+        tile.material = attackableMaterial;
+        highlightedTiles.push(tile);
+        attackableUnits.push(enemy);
+      }
+    }
+
+    // 3. Highlight self for ability (based on class)
+    const currentTile = tiles[effectiveX][effectiveZ];
+    const classData = getClassData(unit.unitClass);
+
+    if (classData.ability === "Heal" && unit.hp < unit.maxHp) {
+      // Medic can self-heal - green highlight
+      currentTile.material = healableMaterial;
+      healableUnits = [unit]; // Self is healable
+    } else if (classData.ability === "Conceal" && !unit.isConcealed) {
+      // Operator can conceal - yellow highlight
+      currentTile.material = selectedMaterial;
+    } else if (classData.ability === "Cover" && !unit.isCovering) {
+      // Soldier can cover - yellow highlight
+      currentTile.material = selectedMaterial;
+    } else {
+      // Default: yellow selected highlight
+      currentTile.material = selectedMaterial;
+    }
+    highlightedTiles.push(currentTile);
+
+    // 4. Also highlight healable allies for Medic
+    if (classData.ability === "Heal") {
+      const allies = getHealableAllies(unit, effectiveX, effectiveZ);
+      for (const ally of allies) {
+        if (ally !== unit) { // Skip self, already handled
+          const tile = tiles[ally.gridX][ally.gridZ];
+          tile.material = healableMaterial;
+          highlightedTiles.push(tile);
+        }
+      }
+      healableUnits = allies;
+    }
+
+    // Update action buttons visibility
+    updateActionButtons();
+  }
+
   // Helper to apply conceal visual (semi-transparent with team color tint)
   // Uses centralized alpha and emissive values
   function applyConcealVisual(unit: Unit): void {
@@ -2685,8 +2764,6 @@ export function createBattleScene(engine: Engine, canvas: HTMLCanvasElement, loa
   function showAttackPreview(unit: Unit, fromX: number, fromZ: number): void {
     clearAttackPreview();
 
-    if (unit.hasAttacked) return;
-
     // Get valid attack tiles from shadow position
     const attackTiles = getValidAttackTiles(unit, fromX, fromZ);
 
@@ -2750,10 +2827,8 @@ export function createBattleScene(engine: Engine, canvas: HTMLCanvasElement, loa
     // Update cover preview if there's a pending cover action
     updateCoverPreview();
 
-    // Clear move highlights
-    clearHighlights();
-    currentActionMode = "none";
-    selectedUnit = null;
+    // Re-highlight remaining available actions (no popup mode)
+    highlightAllAvailableActions(currentUnit!);
 
     // Update menu to show queued action
     updateCommandMenu();
@@ -2775,13 +2850,11 @@ export function createBattleScene(engine: Engine, canvas: HTMLCanvasElement, loa
     // Consume an action (for UI display)
     turnState.actionsRemaining--;
 
-    // Clear attack highlights
-    clearHighlights();
-    currentActionMode = "none";
-    selectedUnit = null;
-
     // Update intent indicators (red for attack)
     updateIntentIndicators();
+
+    // Re-highlight remaining available actions (no popup mode)
+    highlightAllAvailableActions(currentUnit!);
 
     // Update menu to show queued action
     updateCommandMenu();
@@ -2804,13 +2877,11 @@ export function createBattleScene(engine: Engine, canvas: HTMLCanvasElement, loa
     // Consume an action (for UI display)
     turnState.actionsRemaining--;
 
-    // Clear heal highlights
-    clearHighlights();
-    currentActionMode = "none";
-    selectedUnit = null;
-
     // Update intent indicators (green for heal)
     updateIntentIndicators();
+
+    // Re-highlight remaining available actions (no popup mode)
+    highlightAllAvailableActions(currentUnit!);
 
     // Update menu to show queued action
     updateCommandMenu();
@@ -2842,6 +2913,9 @@ export function createBattleScene(engine: Engine, canvas: HTMLCanvasElement, loa
     // Update intent indicators (blue for self-buff)
     updateIntentIndicators();
 
+    // Re-highlight remaining available actions (no popup mode)
+    highlightAllAvailableActions(currentUnit!);
+
     // Update menu to show queued action
     updateCommandMenu();
   }
@@ -2868,6 +2942,9 @@ export function createBattleScene(engine: Engine, canvas: HTMLCanvasElement, loa
 
     // Update intent indicators (blue for self-buff)
     updateIntentIndicators();
+
+    // Re-highlight remaining available actions (no popup mode)
+    highlightAllAvailableActions(currentUnit!);
 
     // Update menu to show queued action
     updateCommandMenu();
@@ -3343,14 +3420,11 @@ export function createBattleScene(engine: Engine, canvas: HTMLCanvasElement, loa
     }
   }
 
-  // Click handling
+  // Click handling - infers action from what was clicked (no popup menu mode)
   scene.onPointerObservable.add((pointerInfo) => {
     if (gameOver) return;
     if (isAnimatingMovement || isExecutingActions) return;  // Block input during animations
     if (pointerInfo.type !== PointerEventTypes.POINTERPICK) return;
-
-    // Check action mode for menu-driven actions
-    const isMenuDriven = currentActionMode !== "none";
 
     const pickedMesh = pointerInfo.pickInfo?.pickedMesh;
     if (!pickedMesh) return;
@@ -3360,48 +3434,47 @@ export function createBattleScene(engine: Engine, canvas: HTMLCanvasElement, loa
     if (metadata?.type === "tile") {
       const { gridX, gridZ } = metadata;
 
-      if (selectedUnit && currentActionMode === "move") {
-        if (isValidMove(gridX, gridZ)) {
-          queueMoveAction(selectedUnit, gridX, gridZ);
-        } else {
-          clearHighlights();
-          clearShadowPreview();
-          clearAttackPreview();
-          shadowPosition = null;
-          selectedUnit = null;
-          if (isMenuDriven) currentActionMode = "none";
-        }
-      } else if (selectedUnit && currentActionMode === "attack") {
-        // Check if there's an attackable unit on this tile
-        const targetUnit = attackableUnits.find(u => u.gridX === gridX && u.gridZ === gridZ);
-        if (targetUnit) {
-          queueAttackAction(selectedUnit, targetUnit);
-        } else {
-          // Clicked invalid tile, cancel attack mode
-          clearHighlights();
-          selectedUnit = null;
-          currentActionMode = "none";
-        }
-      } else if (selectedUnit && currentActionMode === "ability") {
-        // Check if there's a healable unit on this tile
-        // Special case: self-heal with pending move - healer clicks shadow position
-        let targetUnit = healableUnits.find(u => u.gridX === gridX && u.gridZ === gridZ);
-        if (!targetUnit && shadowPosition && gridX === shadowPosition.x && gridZ === shadowPosition.z) {
-          // Clicked on shadow position - check if healer is in healableUnits (self-heal)
-          targetUnit = healableUnits.find(u => u === selectedUnit);
-        }
-        if (targetUnit) {
-          queueHealAction(selectedUnit, targetUnit);
-          clearHighlights();
-          selectedUnit = null;
-          currentActionMode = "none";
-        } else {
-          // Clicked invalid tile, cancel ability mode
-          clearHighlights();
-          selectedUnit = null;
-          currentActionMode = "none";
-        }
+      // Must have a selected unit to take actions
+      if (!selectedUnit || !currentUnit || selectedUnit !== currentUnit) return;
+
+      // Priority 1: Check if there's an attackable enemy on this tile
+      const attackTarget = attackableUnits.find(u => u.gridX === gridX && u.gridZ === gridZ);
+      if (attackTarget) {
+        queueAttackAction(selectedUnit, attackTarget);
+        return;
       }
+
+      // Priority 2: Check if there's a healable ally on this tile
+      const healTarget = healableUnits.find(u => u.gridX === gridX && u.gridZ === gridZ);
+      if (healTarget && healTarget !== selectedUnit) {
+        queueHealAction(selectedUnit, healTarget);
+        return;
+      }
+
+      // Priority 3: Check if clicking unit's effective position (or shadow) for ability
+      const effectiveX = shadowPosition?.x ?? selectedUnit.gridX;
+      const effectiveZ = shadowPosition?.z ?? selectedUnit.gridZ;
+      if (gridX === effectiveX && gridZ === effectiveZ) {
+        // Clicking on self/shadow position - queue ability
+        const classData = getClassData(selectedUnit.unitClass);
+        // Only if ability is available (not already used this turn)
+        if (classData.ability === "Heal" && selectedUnit.hp < selectedUnit.maxHp) {
+          queueHealAction(selectedUnit, selectedUnit);
+        } else if (classData.ability === "Conceal" && !selectedUnit.isConcealed) {
+          queueConcealAction(selectedUnit);
+        } else if (classData.ability === "Cover" && !selectedUnit.isCovering) {
+          queueCoverAction(selectedUnit);
+        }
+        return;
+      }
+
+      // Priority 4: Check if it's a valid move tile
+      if (isValidMove(gridX, gridZ)) {
+        queueMoveAction(selectedUnit, gridX, gridZ);
+        return;
+      }
+
+      // Clicked an invalid tile - do nothing (don't deselect in no-popup mode)
     } else if (metadata?.type === "unit") {
       const clickedUnit = units.find(u =>
         u.mesh === pickedMesh ||
@@ -3409,33 +3482,36 @@ export function createBattleScene(engine: Engine, canvas: HTMLCanvasElement, loa
       );
       if (!clickedUnit) return;
 
-      if (selectedUnit) {
-        if (attackableUnits.includes(clickedUnit) && currentActionMode === "attack") {
-          queueAttackAction(selectedUnit, clickedUnit);
-          return;
-        }
-
-        // Check if clicking a healable ally
-        if (healableUnits.includes(clickedUnit) && currentActionMode === "ability") {
-          // If clicking self with a pending move, don't allow - must click shadow position instead
-          if (clickedUnit === selectedUnit && shadowPosition) {
-            return; // Ignore click on original position, player should click shadow
-          }
-          queueHealAction(selectedUnit, clickedUnit);
-          clearHighlights();
-          selectedUnit = null;
-          currentActionMode = "none";
-          return;
-        }
+      // If clicking an attackable enemy
+      if (selectedUnit && attackableUnits.includes(clickedUnit)) {
+        queueAttackAction(selectedUnit, clickedUnit);
+        return;
       }
 
-      // Try to select/deselect unit
-      if (selectedUnit === clickedUnit) {
-        clearHighlights();
-        selectedUnit = null;
-      } else if (canSelectUnit(clickedUnit)) {
+      // If clicking a healable ally (not self)
+      if (selectedUnit && healableUnits.includes(clickedUnit) && clickedUnit !== selectedUnit) {
+        queueHealAction(selectedUnit, clickedUnit);
+        return;
+      }
+
+      // If clicking self (current unit) - queue ability
+      if (selectedUnit && clickedUnit === selectedUnit) {
+        const classData = getClassData(selectedUnit.unitClass);
+        // Only if ability is available
+        if (classData.ability === "Heal" && selectedUnit.hp < selectedUnit.maxHp) {
+          queueHealAction(selectedUnit, selectedUnit);
+        } else if (classData.ability === "Conceal" && !selectedUnit.isConcealed) {
+          queueConcealAction(selectedUnit);
+        } else if (classData.ability === "Cover" && !selectedUnit.isCovering) {
+          queueCoverAction(selectedUnit);
+        }
+        return;
+      }
+
+      // Try to select a different unit (if it's the current unit's turn)
+      if (canSelectUnit(clickedUnit)) {
         selectedUnit = clickedUnit;
-        highlightValidActions(clickedUnit);
+        highlightAllAvailableActions(clickedUnit);
       }
     }
   });
@@ -3896,6 +3972,101 @@ export function createBattleScene(engine: Engine, canvas: HTMLCanvasElement, loa
   });
 
   // ============================================
+  // ACTION BUTTONS (Cancel & Execute)
+  // ============================================
+
+  // Cancel button - bottom left
+  const cancelBtn = Button.CreateSimpleButton("cancelBtn", "Cancel");
+  cancelBtn.width = "100px";
+  cancelBtn.height = "44px";
+  cancelBtn.background = "#3a2020";
+  cancelBtn.color = "#ff6666";
+  cancelBtn.cornerRadius = 8;
+  cancelBtn.fontSize = 16;
+  cancelBtn.fontWeight = "bold";
+  cancelBtn.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_LEFT;
+  cancelBtn.verticalAlignment = Control.VERTICAL_ALIGNMENT_BOTTOM;
+  cancelBtn.left = "15px";
+  cancelBtn.top = "-15px";
+  cancelBtn.thickness = 2;
+  cancelBtn.isVisible = false;
+  gui.addControl(cancelBtn);
+
+  cancelBtn.onPointerClickObservable.add(() => {
+    if (!currentUnit || !turnState) return;
+
+    // Clear the command queue
+    commandQueue.clear();
+    turnState.pendingActions = [];
+    turnState.actionsRemaining = ACTIONS_PER_TURN;
+
+    // Remove shadow preview
+    clearShadowPreview();
+    shadowPosition = null;
+
+    // Clear cover preview
+    clearCoverPreview();
+
+    // Clear intent indicators
+    clearIntentIndicators();
+
+    // Re-highlight available actions
+    highlightAllAvailableActions(currentUnit);
+
+    // Update action buttons (they should hide since queue is empty)
+    updateActionButtons();
+  });
+
+  // Execute button - bottom right
+  const executeBtn = Button.CreateSimpleButton("executeBtn", "Execute");
+  executeBtn.width = "100px";
+  executeBtn.height = "44px";
+  executeBtn.background = "#203a20";
+  executeBtn.color = "#66ff66";
+  executeBtn.cornerRadius = 8;
+  executeBtn.fontSize = 16;
+  executeBtn.fontWeight = "bold";
+  executeBtn.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_RIGHT;
+  executeBtn.verticalAlignment = Control.VERTICAL_ALIGNMENT_BOTTOM;
+  executeBtn.left = "-15px";
+  executeBtn.top = "-15px";
+  executeBtn.thickness = 2;
+  executeBtn.isVisible = false;
+  gui.addControl(executeBtn);
+
+  // Pulse animation state for execute button
+  let executePulseTime = 0;
+
+  scene.onBeforeRenderObservable.add(() => {
+    if (executeBtn.isVisible && turnState && turnState.pendingActions.length >= 2) {
+      executePulseTime += engine.getDeltaTime() / 1000;
+      const pulse = 0.6 + 0.4 * Math.sin(executePulseTime * 4);
+      executeBtn.background = `rgba(32, 80, 32, ${pulse})`;
+      executeBtn.color = `rgba(102, 255, 102, ${0.7 + 0.3 * pulse})`;
+    } else {
+      executePulseTime = 0;
+      executeBtn.background = "#203a20";
+      executeBtn.color = "#66ff66";
+    }
+  });
+
+  executeBtn.onPointerClickObservable.add(() => {
+    if (!currentUnit || !turnState) return;
+
+    // Execute all queued actions
+    executeQueuedActions();
+  });
+
+  // Update action button visibility
+  function updateActionButtons(): void {
+    const hasQueuedActions = !!(turnState && turnState.pendingActions.length > 0);
+    const isHumanTurn = !!(currentUnit && !controllerManager.isAI(currentUnit.team));
+
+    cancelBtn.isVisible = isHumanTurn && hasQueuedActions;
+    executeBtn.isVisible = isHumanTurn && hasQueuedActions;
+  }
+
+  // ============================================
   // COMMAND MENU UI
   // ============================================
 
@@ -4070,50 +4241,52 @@ export function createBattleScene(engine: Engine, canvas: HTMLCanvasElement, loa
   });
   bottomButtonsGrid.addControl(undoBtn, 0, 0);
 
-  const executeBtn = Button.CreateSimpleButton("executeBtn", "Execute");
-  executeBtn.width = "95%";
-  executeBtn.height = "28px";
-  executeBtn.color = "white";
-  executeBtn.background = "#338833";
-  executeBtn.cornerRadius = 5;
-  executeBtn.fontSize = 12;
-  executeBtn.onPointerClickObservable.add(() => {
+  const menuExecuteBtn = Button.CreateSimpleButton("menuExecuteBtn", "Execute");
+  menuExecuteBtn.width = "95%";
+  menuExecuteBtn.height = "28px";
+  menuExecuteBtn.color = "white";
+  menuExecuteBtn.background = "#338833";
+  menuExecuteBtn.cornerRadius = 5;
+  menuExecuteBtn.fontSize = 12;
+  menuExecuteBtn.onPointerClickObservable.add(() => {
     if (currentUnit && !isExecutingActions) {
       executeQueuedActions();
     }
   });
-  bottomButtonsGrid.addControl(executeBtn, 0, 1);
+  bottomButtonsGrid.addControl(menuExecuteBtn, 0, 1);
 
-  // Pulse the execute button when actions are queued
-  let executePulseTime = 0;
+  // Pulse the menu execute button when actions are queued
+  let menuExecutePulseTime = 0;
   scene.onBeforeRenderObservable.add(() => {
     const shouldPulse = turnState && turnState.pendingActions.length > 0 && turnState.actionsRemaining === 0;
     if (shouldPulse) {
-      executePulseTime += engine.getDeltaTime() / 1000;
-      const pulse = 0.7 + 0.3 * Math.sin(executePulseTime * 4);
+      menuExecutePulseTime += engine.getDeltaTime() / 1000;
+      const pulse = 0.7 + 0.3 * Math.sin(menuExecutePulseTime * 4);
       const g = Math.round(0x88 * pulse);
       const gHex = g.toString(16).padStart(2, '0');
-      executeBtn.background = `#33${gHex}33`;
+      menuExecuteBtn.background = `#33${gHex}33`;
     } else {
-      executePulseTime = 0;
-      executeBtn.background = "#338833";
+      menuExecutePulseTime = 0;
+      menuExecuteBtn.background = "#338833";
     }
   });
 
   // Function to update menu for current unit
+  // Note: Command menu is now hidden - using simplified action buttons instead
   function updateCommandMenu(): void {
+    // Always hide command menu - we use the new mobile UI
+    commandMenu.isVisible = false;
+
     if (!currentUnit) {
-      commandMenu.isVisible = false;
       return;
     }
 
     // Hide menu for AI-controlled units
     if (controllerManager.isAI(currentUnit.team)) {
-      commandMenu.isVisible = false;
       return;
     }
 
-    commandMenu.isVisible = true;
+    // Keep the rest of the function for updating internal state (but menu stays hidden)
 
     // Position menu based on team (P1 = left, P2 = right)
     if (currentUnit.team === "player1") {
@@ -4204,10 +4377,19 @@ export function createBattleScene(engine: Engine, canvas: HTMLCanvasElement, loa
     previewText.text = lines.join("\n");
   }
 
-  // Register menu update callback
+  // Register turn start callback
   onTurnStartCallback = () => {
-    updateCommandMenu();
     updateNextUpIndicator();
+    updateActionButtons();
+
+    // Auto-select the current unit and show all available actions
+    if (currentUnit && !controllerManager.isAI(currentUnit.team)) {
+      selectedUnit = currentUnit;
+      highlightAllAvailableActions(currentUnit);
+    }
+
+    // Hide command menu - using simplified action buttons instead
+    commandMenu.isVisible = false;
   };
 
   // Game is initialized when spawnAllUnits completes (calls startGame)
