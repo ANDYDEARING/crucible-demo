@@ -81,24 +81,64 @@ const COLORS = {
 const UNIT_DESIGNATIONS = ["Δ", "Ψ", "Ω"]; // Delta, Psi, Omega
 
 // Class info
-const CLASS_INFO: Record<UnitClass, { name: string; desc: string }> = {
-  soldier: { name: "Soldier", desc: "Frontline fighter. [COVER] creates zones that trigger counter attacks when enemies end their turn there." },
-  operator: { name: "Operator", desc: "Stealth specialist. [CONCEAL] negates the next incoming hit and won't trigger enemy Cover." },
-  medic: { name: "Medic", desc: "Support unit. [HEAL] restores HP to self or adjacent allies (diagonals require line of sight)." },
+const CLASS_INFO: Record<UnitClass, { name: string; tagline: string; abilityName: string; abilityDesc: string }> = {
+  soldier: {
+    name: "Soldier",
+    tagline: "The settlement's last line of defense",
+    abilityName: "COVER",
+    abilityDesc: "Activate to counter enemies in range, potentially interrupting their move",
+  },
+  operator: {
+    name: "Operator",
+    tagline: "A ghost in the chaos of battle",
+    abilityName: "CONCEAL",
+    abilityDesc: "Activate to negate the next incoming hit and avoid triggering enemy Cover",
+  },
+  medic: {
+    name: "Medic",
+    tagline: "Keeping hope alive under fire",
+    abilityName: "HEAL",
+    abilityDesc: "Restore HP to self or adjacent allies (diagonals require line of sight)",
+  },
 };
 
-// Boost info
+// Boost info - values can be adjusted later
 const BOOST_INFO = [
-  { label: "+25% HP", desc: "Increases maximum health by 25%." },
-  { label: "+25% Power", desc: "Increases attack damage by 25%." },
-  { label: "+25% Speed", desc: "Increases initiative speed by 25%." },
+  { name: "Tough", stat: "HP", value: 25, desc: "This unit has an extra" },
+  { name: "Deadly", stat: "Damage", value: 25, desc: "This unit deals an extra" },
+  { name: "Quick", stat: "Speed", value: 25, desc: "This unit has" },
 ];
+
+// Helper to format boost copy text
+function getBoostCopy(boost: typeof BOOST_INFO[0]): string {
+  return `[${boost.name.toUpperCase()}]: ${boost.desc} +${boost.value}% ${boost.stat}`;
+}
 
 // Weapon info
 const WEAPON_INFO = {
-  ranged: { label: "Ranged", desc: "[RANGED] Attacks anywhere in line of sight, except adjacent tiles." },
-  melee: { label: "Melee", desc: "[MELEE] 2x damage. Attacks adjacent spaces only." },
+  ranged: {
+    label: "Ranged",
+    desc: "This unit can attack any unit that is not adjacent (including diagonals) and in its Line of Sight",
+  },
+  melee: {
+    label: "Melee",
+    desc: "This unit deals 2x damage and attacks adjacent spaces only",
+  },
 };
+
+// Helper to get full unit description
+function getUnitDescription(unitClass: UnitClass, boostIndex: number, weaponStyle: "ranged" | "melee"): string {
+  const cls = CLASS_INFO[unitClass];
+  const boost = BOOST_INFO[boostIndex];
+  const weapon = WEAPON_INFO[weaponStyle];
+
+  return [
+    `${cls.name}: ${cls.tagline}`,
+    `[${cls.abilityName}]: ${cls.abilityDesc}`,
+    getBoostCopy(boost),
+    `[${weapon.label.toUpperCase()}]: ${weapon.desc}`,
+  ].join("\n\n");
+}
 
 export function createLoadoutScene(
   engine: Engine,
@@ -982,10 +1022,10 @@ export function createLoadoutScene(
       classButtons.push(btn);
     });
 
-    // Row 1: Boost buttons (+25% HP, +25% Power, +25% Speed)
+    // Row 1: Boost buttons (Tough, Deadly, Quick)
     const boostButtons: Button[] = [];
     BOOST_INFO.forEach((boost, i) => {
-      const btn = createBtn(`${playerId}${unitIndex}boost${i}`, boost.label, 1, i, i === 0);
+      const btn = createBtn(`${playerId}${unitIndex}boost${i}`, boost.name, 1, i, i === 0);
       btn.onPointerClickObservable.add(() => {
         selectedBoost = i;
         boostButtons.forEach((b, j) => {
@@ -1081,17 +1121,12 @@ export function createLoadoutScene(
       openAppearanceEditor(playerId, unitIndex, selectionArray);
     });
 
-    // === COLUMN 2: Copy text OR nothing (info icon moved to button grid) ===
-    let copyClassText: TextBlock | null = null;
-    let copyBoostText: TextBlock | null = null;
-    let copyWeaponText: TextBlock | null = null;
+    // === COLUMN 2: Copy text (single combined description) ===
+    let copyText: TextBlock | null = null;
 
     // Tooltip elements (used by mobile info circle)
     let tooltipBackdrop: Rectangle | null = null;
     let tooltipOverlay: Rectangle | null = null;
-    let tooltipClassText: TextBlock | null = null;
-    let tooltipBoostText: TextBlock | null = null;
-    let tooltipWeaponText: TextBlock | null = null;
 
     if (isMobile) {
       // Info circle (magnifying glass) - next to edit button
@@ -1162,65 +1197,24 @@ export function createLoadoutScene(
       tooltipInner.paddingRight = "24px";
       tooltipOverlay.addControl(tooltipInner);
 
-      const tooltipStack = new StackPanel();
-      tooltipStack.width = "100%";
-      tooltipStack.isVertical = true;
-      tooltipInner.addControl(tooltipStack);
+      // Single text block for unit description
+      const tooltipText = new TextBlock();
+      tooltipText.text = getUnitDescription(selectedClass, selectedBoost, selectedStyle);
+      tooltipText.color = COLORS.textPrimary;
+      tooltipText.fontSize = fontSize;
+      tooltipText.textWrapping = true;
+      tooltipText.resizeToFit = true;
+      tooltipText.textHorizontalAlignment = Control.HORIZONTAL_ALIGNMENT_LEFT;
+      tooltipInner.addControl(tooltipText);
 
-      const tooltipTitle = new TextBlock();
-      tooltipTitle.text = `UNIT ${UNIT_DESIGNATIONS[unitIndex]}`;
-      tooltipTitle.color = COLORS.accentOrange;
-      tooltipTitle.fontSize = headerFontSize;
-      tooltipTitle.fontFamily = "'Bebas Neue', sans-serif";
-      tooltipTitle.height = "36px";
-      tooltipTitle.textHorizontalAlignment = Control.HORIZONTAL_ALIGNMENT_LEFT;
-      tooltipTitle.paddingBottom = "8px";
-      tooltipStack.addControl(tooltipTitle);
-
-      tooltipClassText = new TextBlock();
-      tooltipClassText.color = COLORS.textPrimary;
-      tooltipClassText.fontSize = fontSize;
-      tooltipClassText.textWrapping = true;
-      tooltipClassText.resizeToFit = true;
-      tooltipClassText.textHorizontalAlignment = Control.HORIZONTAL_ALIGNMENT_LEFT;
-      tooltipClassText.paddingBottom = "16px";
-      tooltipStack.addControl(tooltipClassText);
-
-      tooltipBoostText = new TextBlock();
-      tooltipBoostText.color = COLORS.textSecondary;
-      tooltipBoostText.fontSize = fontSize;
-      tooltipBoostText.textWrapping = true;
-      tooltipBoostText.resizeToFit = true;
-      tooltipBoostText.textHorizontalAlignment = Control.HORIZONTAL_ALIGNMENT_LEFT;
-      tooltipBoostText.paddingBottom = "16px";
-      tooltipStack.addControl(tooltipBoostText);
-
-      tooltipWeaponText = new TextBlock();
-      tooltipWeaponText.color = COLORS.textSecondary;
-      tooltipWeaponText.fontSize = fontSize;
-      tooltipWeaponText.textWrapping = true;
-      tooltipWeaponText.resizeToFit = true;
-      tooltipWeaponText.textHorizontalAlignment = Control.HORIZONTAL_ALIGNMENT_LEFT;
-      tooltipStack.addControl(tooltipWeaponText);
-
-      // Update tooltip content
-      const updateTooltip = () => {
-        if (tooltipClassText) tooltipClassText.text = `CLASS: ${CLASS_INFO[selectedClass].name}\n${CLASS_INFO[selectedClass].desc}`;
-        if (tooltipBoostText) tooltipBoostText.text = `BOOST: ${BOOST_INFO[selectedBoost].label}\n${BOOST_INFO[selectedBoost].desc}`;
-        if (tooltipWeaponText) tooltipWeaponText.text = `WEAPON: ${WEAPON_INFO[selectedStyle].label}\n${WEAPON_INFO[selectedStyle].desc}`;
-      };
-      updateTooltip();
+      // Store reference for updates
+      copyText = tooltipText;
 
       infoCircle.onPointerClickObservable.add(() => {
-        updateTooltip();
+        if (copyText) copyText.text = getUnitDescription(selectedClass, selectedBoost, selectedStyle);
         if (tooltipBackdrop) tooltipBackdrop.isVisible = true;
         if (tooltipOverlay) tooltipOverlay.isVisible = true;
       });
-
-      // Store reference for updates
-      copyClassText = tooltipClassText;
-      copyBoostText = tooltipBoostText;
-      copyWeaponText = tooltipWeaponText;
 
     } else {
       // Tablet/Desktop: Show copy text inline
@@ -1230,46 +1224,19 @@ export function createLoadoutScene(
       copyContainer.thickness = 0;
       copyContainer.paddingLeft = "8px";
       copyContainer.paddingRight = "8px";
-      copyContainer.paddingTop = "6px";
-      copyContainer.paddingBottom = "6px";
+      copyContainer.paddingTop = "4px";
+      copyContainer.paddingBottom = "4px";
       mainGrid.addControl(copyContainer, 0, 2);
 
-      const copyStack = new StackPanel();
-      copyStack.width = "100%";
-      copyStack.height = "100%";
-      copyStack.isVertical = true;
-      copyStack.verticalAlignment = Control.VERTICAL_ALIGNMENT_TOP;
-      copyContainer.addControl(copyStack);
-
-      copyClassText = new TextBlock();
-      copyClassText.text = CLASS_INFO[selectedClass].desc;
-      copyClassText.color = COLORS.textSecondary;
-      copyClassText.fontSize = tinyFontSize;
-      copyClassText.textWrapping = true;
-      copyClassText.textHorizontalAlignment = Control.HORIZONTAL_ALIGNMENT_LEFT;
-      copyClassText.textVerticalAlignment = Control.VERTICAL_ALIGNMENT_TOP;
-      copyClassText.height = "50px";
-      copyStack.addControl(copyClassText);
-
-      copyBoostText = new TextBlock();
-      copyBoostText.text = BOOST_INFO[selectedBoost].desc;
-      copyBoostText.color = COLORS.textMuted;
-      copyBoostText.fontSize = tinyFontSize;
-      copyBoostText.textWrapping = true;
-      copyBoostText.textHorizontalAlignment = Control.HORIZONTAL_ALIGNMENT_LEFT;
-      copyBoostText.textVerticalAlignment = Control.VERTICAL_ALIGNMENT_TOP;
-      copyBoostText.height = "30px";
-      copyStack.addControl(copyBoostText);
-
-      copyWeaponText = new TextBlock();
-      copyWeaponText.text = WEAPON_INFO[selectedStyle].desc;
-      copyWeaponText.color = COLORS.textMuted;
-      copyWeaponText.fontSize = tinyFontSize;
-      copyWeaponText.textWrapping = true;
-      copyWeaponText.textHorizontalAlignment = Control.HORIZONTAL_ALIGNMENT_LEFT;
-      copyWeaponText.textVerticalAlignment = Control.VERTICAL_ALIGNMENT_TOP;
-      copyWeaponText.height = "30px";
-      copyStack.addControl(copyWeaponText);
+      // Single text block for unit description
+      copyText = new TextBlock();
+      copyText.text = getUnitDescription(selectedClass, selectedBoost, selectedStyle);
+      copyText.color = COLORS.textSecondary;
+      copyText.fontSize = tinyFontSize;
+      copyText.textWrapping = true;
+      copyText.textHorizontalAlignment = Control.HORIZONTAL_ALIGNMENT_LEFT;
+      copyText.textVerticalAlignment = Control.VERTICAL_ALIGNMENT_TOP;
+      copyContainer.addControl(copyText);
     }
 
     // === COLUMN 3: Preview (Desktop only) - RTT based ===
@@ -1466,26 +1433,8 @@ export function createLoadoutScene(
 
     // Update copy text and preview
     function updateCopy(): void {
-      if (copyClassText) {
-        if (isMobile) {
-          copyClassText.text = `CLASS: ${CLASS_INFO[selectedClass].name}\n${CLASS_INFO[selectedClass].desc}`;
-        } else {
-          copyClassText.text = CLASS_INFO[selectedClass].desc;
-        }
-      }
-      if (copyBoostText) {
-        if (isMobile) {
-          copyBoostText.text = `BOOST: ${BOOST_INFO[selectedBoost].label}\n${BOOST_INFO[selectedBoost].desc}`;
-        } else {
-          copyBoostText.text = BOOST_INFO[selectedBoost].desc;
-        }
-      }
-      if (copyWeaponText) {
-        if (isMobile) {
-          copyWeaponText.text = `WEAPON: ${WEAPON_INFO[selectedStyle].label}\n${WEAPON_INFO[selectedStyle].desc}`;
-        } else {
-          copyWeaponText.text = WEAPON_INFO[selectedStyle].desc;
-        }
+      if (copyText) {
+        copyText.text = getUnitDescription(selectedClass, selectedBoost, selectedStyle);
       }
       // Update 3D preview on desktop
       if (loadUnitPreview) {
