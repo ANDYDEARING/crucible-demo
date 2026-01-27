@@ -247,7 +247,7 @@ export function createTitleScene(
 
   // Version label
   const versionLabel = new TextBlock();
-  versionLabel.text = "[ DEMO - Early - NOT BALANCED ]";
+  versionLabel.text = "[ DEMO - Early - NOT BALANCED ] v0.1";
   versionLabel.color = "rgba(180, 180, 180, 0)";
   versionLabel.fontFamily = "'Exo 2', sans-serif";
   versionLabel.fontSize = 11;

@@ -2828,7 +2828,7 @@ export function createBattleScene(engine: Engine, canvas: HTMLCanvasElement, loa
 
   // Queue a move action instead of executing immediately
   function queueMoveAction(unit: Unit, targetX: number, targetZ: number): void {
-    if (!turnState) return;
+    if (!turnState || !hasActionsRemaining()) return;
 
     // Add command to queue
     commandQueue.enqueue(createMoveCommand(targetX, targetZ));
@@ -2859,7 +2859,7 @@ export function createBattleScene(engine: Engine, canvas: HTMLCanvasElement, loa
 
   // Queue an attack action instead of executing immediately
   function queueAttackAction(_attacker: Unit, defender: Unit): void {
-    if (!turnState) return;
+    if (!turnState || !hasActionsRemaining()) return;
 
     // Add command to queue
     commandQueue.enqueue(createAttackCommand(getUnitId(defender)));
@@ -2885,7 +2885,7 @@ export function createBattleScene(engine: Engine, canvas: HTMLCanvasElement, loa
 
   // Queue a heal action instead of executing immediately
   function queueHealAction(_healer: Unit, target: Unit): void {
-    if (!turnState) return;
+    if (!turnState || !hasActionsRemaining()) return;
 
     // Add command to queue
     commandQueue.enqueue(createHealCommand(getUnitId(target)));
@@ -2912,7 +2912,7 @@ export function createBattleScene(engine: Engine, canvas: HTMLCanvasElement, loa
 
   // Queue a conceal action instead of executing immediately
   function queueConcealAction(unit: Unit): void {
-    if (!turnState) return;
+    if (!turnState || !hasActionsRemaining()) return;
 
     // Don't allow queuing if already concealed
     if (unit.isConcealed) {
@@ -2945,7 +2945,7 @@ export function createBattleScene(engine: Engine, canvas: HTMLCanvasElement, loa
 
   // Queue a cover action instead of executing immediately
   function queueCoverAction(unit: Unit): void {
-    if (!turnState) return;
+    if (!turnState || !hasActionsRemaining()) return;
 
     // Add command to queue
     commandQueue.enqueue(createCoverCommand());
@@ -3468,8 +3468,9 @@ export function createBattleScene(engine: Engine, canvas: HTMLCanvasElement, loa
     if (metadata?.type === "tile") {
       const { gridX, gridZ } = metadata;
 
-      // Must have a selected unit to take actions
+      // Must have a selected unit with actions remaining to take actions
       if (!selectedUnit || !currentUnit || selectedUnit !== currentUnit) return;
+      if (!hasActionsRemaining()) return;
 
       // Priority 1: Check if there's an attackable enemy on this tile
       const attackTarget = attackableUnits.find(u => u.gridX === gridX && u.gridZ === gridZ);
@@ -3491,7 +3492,7 @@ export function createBattleScene(engine: Engine, canvas: HTMLCanvasElement, loa
       if (gridX === effectiveX && gridZ === effectiveZ) {
         // Clicking on self/shadow position - queue ability
         const classData = getClassData(selectedUnit.unitClass);
-        // Only if ability is available (not already used this turn)
+        // Only if ability is available (not already active)
         if (classData.ability === "Heal" && selectedUnit.hp < selectedUnit.maxHp) {
           queueHealAction(selectedUnit, selectedUnit);
         } else if (classData.ability === "Conceal" && !selectedUnit.isConcealed) {
@@ -4603,18 +4604,24 @@ export function createBattleScene(engine: Engine, canvas: HTMLCanvasElement, loa
       return;
     }
 
+    const total = ACTIONS_PER_TURN;
+    const unitDesignation = UNIT_DESIGNATIONS[currentUnit.loadoutIndex] || "?";
+    const unitClassName = getClassData(currentUnit.unitClass).name;
+
     // Track cumulative HP changes across queued actions
     const hpDeltas = new Map<Unit, number>();
 
-    for (const action of turnState.pendingActions) {
+    for (let i = 0; i < turnState.pendingActions.length; i++) {
+      const action = turnState.pendingActions[i];
+      const n = i + 1;
       const actionLine = new TextBlock();
       actionLine.fontSize = 12;
-      actionLine.height = "18px";
+      actionLine.textWrapping = true;
       actionLine.resizeToFit = true;
 
       if (action.type === "move") {
-        actionLine.text = `Move to (${action.targetX}, ${action.targetZ})`;
-        actionLine.color = "#88ccff"; // Blue for move
+        actionLine.text = `Action ${n} of ${total}: ${unitDesignation} ${unitClassName} Move`;
+        actionLine.color = "#88ccff";
       } else if (action.type === "attack" && action.targetUnit) {
         const target = action.targetUnit;
         const targetDesignation = UNIT_DESIGNATIONS[target.loadoutIndex] || "?";
@@ -4624,25 +4631,29 @@ export function createBattleScene(engine: Engine, canvas: HTMLCanvasElement, loa
         const pendingHp = Math.max(0, Math.min(target.maxHp, target.hp + (hpDeltas.get(target) || 0)));
         const newHp = Math.max(0, pendingHp - damage);
         hpDeltas.set(target, (hpDeltas.get(target) || 0) + (newHp - pendingHp));
-        actionLine.text = `${targetDesignation} ${targetClass} HP ${pendingHp} → ${newHp}`;
-        actionLine.color = "#ff6666"; // Red for attack
+        const verb = isMelee ? "Strike" : "Shoot";
+        actionLine.text = `Action ${n} of ${total}: ${unitDesignation} ${unitClassName} ${verb} ${targetDesignation} ${targetClass} ${pendingHp}→${newHp}`;
+        actionLine.color = "#ff6666";
       } else if (action.type === "ability" && action.abilityName === "heal" && action.targetUnit) {
         const target = action.targetUnit;
-        const targetDesignation = UNIT_DESIGNATIONS[target.loadoutIndex] || "?";
-        const targetClass = getClassData(target.unitClass).name;
         const healAmt = currentUnit.healAmount;
         const pendingHp = Math.max(0, Math.min(target.maxHp, target.hp + (hpDeltas.get(target) || 0)));
         const newHp = Math.min(target.maxHp, pendingHp + healAmt);
         hpDeltas.set(target, (hpDeltas.get(target) || 0) + (newHp - pendingHp));
-        const name = target === currentUnit ? "Self" : `${targetDesignation} ${targetClass}`;
-        actionLine.text = `${name} HP ${pendingHp} → ${newHp}`;
-        actionLine.color = "#66ff66"; // Green for heal
+        if (target === currentUnit) {
+          actionLine.text = `Action ${n} of ${total}: ${unitDesignation} ${unitClassName} Heal ${pendingHp}→${newHp}`;
+        } else {
+          const targetDesignation = UNIT_DESIGNATIONS[target.loadoutIndex] || "?";
+          const targetClass = getClassData(target.unitClass).name;
+          actionLine.text = `Action ${n} of ${total}: ${unitDesignation} ${unitClassName} Heal ${targetDesignation} ${targetClass} ${pendingHp}→${newHp}`;
+        }
+        actionLine.color = "#66ff66";
       } else if (action.type === "ability" && action.abilityName === "conceal") {
-        actionLine.text = "Conceal";
-        actionLine.color = "#ffff66"; // Yellow for ability
+        actionLine.text = `Action ${n} of ${total}: ${unitDesignation} ${unitClassName} Conceal`;
+        actionLine.color = "#ffff66";
       } else if (action.type === "ability" && action.abilityName === "cover") {
-        actionLine.text = "Cover";
-        actionLine.color = "#ffff66"; // Yellow for ability
+        actionLine.text = `Action ${n} of ${total}: ${unitDesignation} ${unitClassName} Cover`;
+        actionLine.color = "#ffff66";
       }
 
       queuedActionsStack.addControl(actionLine);
