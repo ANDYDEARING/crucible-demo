@@ -95,6 +95,9 @@ import { MUSIC, SFX, AUDIO_VOLUMES, LOOP_BUFFER_TIME } from "../config";
 // Import utility functions
 import { hexToColor3, createMusicPlayer, playSfx, rgbToColor3 } from "../utils";
 
+// Module-level music player (persists across orientation reloads)
+let battleMusic: HTMLAudioElement | null = null;
+
 // Import command pattern for action queue
 import {
   type CommandExecutor,
@@ -126,14 +129,36 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
   const bg = SCENE_BACKGROUNDS.battle;
   scene.clearColor.set(bg.r, bg.g, bg.b, bg.a);
 
-  // Battle music - Placeholder
-  // Background music - using centralized audio config
-  const music = createMusicPlayer(MUSIC.battle, AUDIO_VOLUMES.music, true, LOOP_BUFFER_TIME);
-  music.play();
+  // ============================================
+  // RESPONSIVE SIZING
+  // ============================================
+  const screenWidth = engine.getRenderWidth();
+  const screenHeight = engine.getRenderHeight();
+  const isLandscapePhone = screenHeight < 500 && screenWidth < 1024;
+  const isMobile = screenWidth < 600 && !isLandscapePhone;
+  const isTablet = (screenWidth >= 600 && screenWidth < 1024) || isLandscapePhone;
+  const isTouch = isMobile || isTablet;
+
+  // Note: We don't reload BattleScene on orientation change since that would
+  // lose all battle state (unit positions, HP, turn order). The UI scales
+  // reasonably and the 3D scene auto-adjusts via engine.resize().
+
+  // Battle music - using module-level variable for persistence across reloads
+  if (!battleMusic) {
+    battleMusic = createMusicPlayer(MUSIC.battle, AUDIO_VOLUMES.music, true, LOOP_BUFFER_TIME);
+  }
+  // Only start playing if not already playing
+  if (battleMusic.paused) {
+    battleMusic.play();
+  }
 
   scene.onDisposeObservable.add(() => {
-    music.pause();
-    music.src = "";
+    // Stop music when leaving battle scene
+    if (battleMusic) {
+      battleMusic.pause();
+      battleMusic.src = "";
+      battleMusic = null;
+    }
   });
 
   // Sound effects
@@ -2644,9 +2669,8 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
     const b = Math.round(currentUnit.teamColor.b * 255).toString(16).padStart(2, '0');
     const teamColorHex = `#${r}${g}${b}`;
 
-    const unitName = getClassData(currentUnit.unitClass).name;
-    const speedInfo = `(Spd: ${getEffectiveSpeed(currentUnit).toFixed(1)})`;
-    turnText.text = `${teamName}'s ${unitName} ${speedInfo}`;
+    // Just show team turn - unit details will be in popup
+    turnText.text = `${teamName}'s Turn`;
     turnText.color = teamColorHex;
   }
 
@@ -3419,41 +3443,103 @@ export function createBattleScene(engine: Engine, _canvas: HTMLCanvasElement, lo
     }
   });
 
-  // Turn indicator
+  // Turn indicator (just the team turn, unit details will be in popup)
   const turnText = new TextBlock();
-  turnText.text = "Player 1's Turn";
+  turnText.text = "";
   turnText.color = "#4488ff";
-  turnText.fontSize = 24;
+  turnText.fontSize = isTouch ? 18 : 24;
   turnText.top = "-45%";
   turnText.fontWeight = "bold";
   gui.addControl(turnText);
 
-  // Rotation buttons
-  const rotateLeftBtn = Button.CreateSimpleButton("rotateLeft", "↺");
-  rotateLeftBtn.width = "50px";
-  rotateLeftBtn.height = "50px";
-  rotateLeftBtn.color = "white";
-  rotateLeftBtn.background = "#444444";
-  rotateLeftBtn.cornerRadius = 25;
-  rotateLeftBtn.left = "-45%";
-  rotateLeftBtn.top = "40%";
-  rotateLeftBtn.onPointerClickObservable.add(() => {
-    camera.alpha += Math.PI / 2;
-  });
-  gui.addControl(rotateLeftBtn);
+  // ============================================
+  // CAMERA MODE TOGGLE (touch devices only)
+  // ============================================
+  let cameraMode: "rotate" | "pan" = "rotate";
 
-  const rotateRightBtn = Button.CreateSimpleButton("rotateRight", "↻");
-  rotateRightBtn.width = "50px";
-  rotateRightBtn.height = "50px";
-  rotateRightBtn.color = "white";
-  rotateRightBtn.background = "#444444";
-  rotateRightBtn.cornerRadius = 25;
-  rotateRightBtn.left = "45%";
-  rotateRightBtn.top = "40%";
-  rotateRightBtn.onPointerClickObservable.add(() => {
-    camera.alpha -= Math.PI / 2;
+  // Custom panning state
+  let isPanning = false;
+  let lastPanX = 0;
+  let lastPanY = 0;
+
+  // Camera mode toggle button - top right
+  const cameraModeBtn = Button.CreateSimpleButton("cameraMode", "");
+  cameraModeBtn.width = "50px";
+  cameraModeBtn.height = "50px";
+  cameraModeBtn.color = "white";
+  cameraModeBtn.background = "#444444";
+  cameraModeBtn.cornerRadius = 25;
+  cameraModeBtn.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_RIGHT;
+  cameraModeBtn.verticalAlignment = Control.VERTICAL_ALIGNMENT_TOP;
+  cameraModeBtn.left = "-15px";
+  cameraModeBtn.top = "15px";
+  cameraModeBtn.thickness = 2;
+
+  // Icon text block (we'll use unicode symbols)
+  const cameraModeIcon = new TextBlock("cameraModeIcon");
+  cameraModeIcon.fontSize = 24;
+  cameraModeIcon.color = "white";
+  cameraModeBtn.addControl(cameraModeIcon);
+
+  function updateCameraModeButton(): void {
+    if (cameraMode === "rotate") {
+      // Rotation mode: show elliptical arrow (rotation icon)
+      cameraModeIcon.text = "⟳";  // Clockwise rotation arrow
+      cameraModeBtn.background = "#444444";
+      // Re-enable camera's built-in rotation controls
+      camera.attachControl(true);
+    } else {
+      // Pan mode: show compass (lateral movement icon)
+      cameraModeIcon.text = "✥";  // Four-pointed star / compass
+      cameraModeBtn.background = "#664422";
+      // Detach camera controls - we'll handle panning manually
+      camera.detachControl();
+    }
+  }
+
+  cameraModeBtn.onPointerClickObservable.add(() => {
+    cameraMode = cameraMode === "rotate" ? "pan" : "rotate";
+    updateCameraModeButton();
   });
-  gui.addControl(rotateRightBtn);
+
+  // Custom pan handling when in pan mode
+  scene.onPointerObservable.add((pointerInfo) => {
+    if (cameraMode !== "pan") return;
+
+    switch (pointerInfo.type) {
+      case PointerEventTypes.POINTERDOWN:
+        isPanning = true;
+        lastPanX = pointerInfo.event.clientX;
+        lastPanY = pointerInfo.event.clientY;
+        break;
+      case PointerEventTypes.POINTERUP:
+        isPanning = false;
+        break;
+      case PointerEventTypes.POINTERMOVE:
+        if (isPanning) {
+          const deltaX = pointerInfo.event.clientX - lastPanX;
+          const deltaY = pointerInfo.event.clientY - lastPanY;
+          lastPanX = pointerInfo.event.clientX;
+          lastPanY = pointerInfo.event.clientY;
+
+          // Calculate pan direction based on camera angle
+          const panSpeed = 0.05;
+          const cosAlpha = Math.cos(camera.alpha);
+          const sinAlpha = Math.sin(camera.alpha);
+
+          // Move camera target (panning) - drag direction matches movement
+          camera.target.x += (deltaX * cosAlpha + deltaY * sinAlpha) * panSpeed;
+          camera.target.z += (-deltaX * sinAlpha + deltaY * cosAlpha) * panSpeed;
+        }
+        break;
+    }
+  });
+
+  // Only show on touch devices
+  if (isTouch) {
+    gui.addControl(cameraModeBtn);
+    updateCameraModeButton();
+  }
 
   // ============================================
   // COMMAND MENU UI
