@@ -194,7 +194,11 @@ export function createBattleScene(engine: Engine, canvas: HTMLCanvasElement, loa
     new Vector3(0, 0, 0),
     scene
   );
-  camera.attachControl(true);
+  // On touch devices, start with camera controls detached - toggle button will manage it
+  // On desktop, attach controls immediately
+  if (!isTouch) {
+    camera.attachControl(true);
+  }
   camera.lowerBetaLimit = BATTLE_CAMERA_LOWER_BETA_LIMIT;
   camera.upperBetaLimit = BATTLE_CAMERA_UPPER_BETA_LIMIT;
   camera.lowerRadiusLimit = BATTLE_CAMERA_LOWER_RADIUS_LIMIT;
@@ -549,8 +553,9 @@ export function createBattleScene(engine: Engine, canvas: HTMLCanvasElement, loa
   // Export state extraction for external use (AI, simulations)
   void extractBattleState; // Prevent unused warning
 
-  // GUI
+  // GUI - ensure it captures pointer events before the scene
   const gui = AdvancedDynamicTexture.CreateFullscreenUI("UI");
+  gui.isForeground = true;
 
   // Units
   const units: Unit[] = [];
@@ -3549,6 +3554,8 @@ export function createBattleScene(engine: Engine, canvas: HTMLCanvasElement, loa
   cameraModeContainer.top = "15px";
   cameraModeContainer.thickness = 2;
   cameraModeContainer.color = "#555555";
+  cameraModeContainer.zIndex = 50;
+  cameraModeContainer.isPointerBlocker = true;
 
   // Grid to hold both toggle options
   const toggleGrid = new Grid("toggleGrid");
@@ -3563,6 +3570,7 @@ export function createBattleScene(engine: Engine, canvas: HTMLCanvasElement, loa
   rotateBtn.background = "#555555";
   rotateBtn.cornerRadius = 18;
   rotateBtn.thickness = 0;
+  rotateBtn.isPointerBlocker = true;
   const rotateIcon = new TextBlock("rotateIcon", "⟳");
   rotateIcon.fontSize = 20;
   rotateIcon.color = "white";
@@ -3577,6 +3585,7 @@ export function createBattleScene(engine: Engine, canvas: HTMLCanvasElement, loa
   panBtn.background = "transparent";
   panBtn.cornerRadius = 18;
   panBtn.thickness = 0;
+  panBtn.isPointerBlocker = true;
   const panIcon = new TextBlock("panIcon", "✥");
   panIcon.fontSize = 18;
   panIcon.color = "#888888";
@@ -3603,14 +3612,14 @@ export function createBattleScene(engine: Engine, canvas: HTMLCanvasElement, loa
     }
   }
 
-  rotateBtn.onPointerClickObservable.add(() => {
+  rotateBtn.onPointerUpObservable.add(() => {
     if (cameraMode !== "rotate") {
       cameraMode = "rotate";
       updateCameraModeButton();
     }
   });
 
-  panBtn.onPointerClickObservable.add(() => {
+  panBtn.onPointerUpObservable.add(() => {
     if (cameraMode !== "pan") {
       cameraMode = "pan";
       updateCameraModeButton();
@@ -3768,69 +3777,43 @@ export function createBattleScene(engine: Engine, canvas: HTMLCanvasElement, loa
     return result;
   }
 
-  // Turn indicator button in top left - shows NOW and Next Up, clickable for modal
-  const turnIndicatorBtn = Button.CreateSimpleButton("turnIndicatorBtn", "");
-  turnIndicatorBtn.width = "200px";
-  turnIndicatorBtn.height = "60px";
-  turnIndicatorBtn.background = "rgba(20, 20, 30, 0.8)";
-  turnIndicatorBtn.cornerRadius = 8;
-  turnIndicatorBtn.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_LEFT;
-  turnIndicatorBtn.verticalAlignment = Control.VERTICAL_ALIGNMENT_TOP;
-  turnIndicatorBtn.left = "15px";
-  turnIndicatorBtn.top = "15px";
-  turnIndicatorBtn.thickness = 2;
-  turnIndicatorBtn.color = "white";
+  // Turn order button in top left - hamburger menu icon, opens modal
+  const turnOrderBtn = Button.CreateSimpleButton("turnOrderBtn", "");
+  turnOrderBtn.width = "44px";
+  turnOrderBtn.height = "44px";
+  turnOrderBtn.background = "rgba(40, 40, 50, 0.9)";
+  turnOrderBtn.cornerRadius = 22;
+  turnOrderBtn.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_LEFT;
+  turnOrderBtn.verticalAlignment = Control.VERTICAL_ALIGNMENT_TOP;
+  turnOrderBtn.left = "15px";
+  turnOrderBtn.top = "15px";
+  turnOrderBtn.thickness = 2;
+  turnOrderBtn.color = "white";
+  turnOrderBtn.isPointerBlocker = true;
+  turnOrderBtn.zIndex = 50;
 
-  // Stack for two-line layout
-  const turnIndicatorStack = new StackPanel("turnIndicatorStack");
-  turnIndicatorStack.isVertical = true;
-  turnIndicatorStack.paddingLeft = "8px";
-  turnIndicatorStack.paddingRight = "8px";
-  turnIndicatorBtn.addControl(turnIndicatorStack);
+  // Hamburger icon (3 horizontal lines)
+  const hamburgerStack = new StackPanel("hamburgerStack");
+  hamburgerStack.isVertical = true;
+  hamburgerStack.width = "20px";
+  hamburgerStack.height = "16px";
+  hamburgerStack.isHitTestVisible = false;
+  turnOrderBtn.addControl(hamburgerStack);
 
-  // NOW line
-  const nowLineStack = new StackPanel("nowLineStack");
-  nowLineStack.isVertical = false;
-  nowLineStack.height = "22px";
-  turnIndicatorStack.addControl(nowLineStack);
+  for (let i = 0; i < 3; i++) {
+    const line = new Rectangle(`hamburgerLine${i}`);
+    line.width = "20px";
+    line.height = "2px";
+    line.background = "white";
+    line.thickness = 0;
+    line.isHitTestVisible = false;
+    if (i < 2) {
+      line.paddingBottom = "5px";
+    }
+    hamburgerStack.addControl(line);
+  }
 
-  const nowLabel = new TextBlock("nowLabel");
-  nowLabel.text = "NOW: ";
-  nowLabel.fontSize = 12;
-  nowLabel.fontWeight = "bold";
-  nowLabel.color = "#ffff66";
-  nowLabel.resizeToFit = true;
-  nowLineStack.addControl(nowLabel);
-
-  const nowUnitText = new TextBlock("nowUnitText");
-  nowUnitText.text = "...";
-  nowUnitText.fontSize = 12;
-  nowUnitText.fontWeight = "bold";
-  nowUnitText.color = "#888888";
-  nowUnitText.resizeToFit = true;
-  nowLineStack.addControl(nowUnitText);
-
-  // Next Up line
-  const nextLineStack = new StackPanel("nextLineStack");
-  nextLineStack.isVertical = false;
-  nextLineStack.height = "22px";
-  turnIndicatorStack.addControl(nextLineStack);
-
-  const nextUpLabel = new TextBlock("nextUpLabel");
-  nextUpLabel.text = "Next: ";
-  nextUpLabel.fontSize = 11;
-  nextUpLabel.color = "white";
-  nextUpLabel.resizeToFit = true;
-  nextLineStack.addControl(nextUpLabel);
-
-  const nextUpText = new TextBlock("nextUpText");
-  nextUpText.text = "...";
-  nextUpText.fontSize = 11;
-  nextUpText.color = "#888888";
-  nextUpText.resizeToFit = true;
-  nextLineStack.addControl(nextUpText);
-
-  gui.addControl(turnIndicatorBtn);
+  gui.addControl(turnOrderBtn);
 
   // Turn order modal
   const turnOrderBackdrop = new Rectangle("turnOrderBackdrop");
@@ -3885,43 +3868,9 @@ export function createBattleScene(engine: Engine, canvas: HTMLCanvasElement, loa
   turnOrderStack.paddingTop = "10px";
   turnOrderScroll.addControl(turnOrderStack);
 
-  function getUnitDisplayText(unit: Unit): string {
-    const designation = UNIT_DESIGNATIONS[unit.loadoutIndex] || "?";
-    const className = getClassData(unit.unitClass).name;
-    const isMelee = unit.customization?.combatStyle === "melee";
-    const weapon = isMelee ? "Melee" : "Ranged";
-    const boostData = BOOST_INFO[unit.boost] || BOOST_INFO[0];
-    return `${designation} ${className} (${weapon}, ${boostData.name})`;
-  }
-
-  function getUnitTeamColor(unit: Unit): string {
-    const r = Math.round(unit.teamColor.r * 255).toString(16).padStart(2, '0');
-    const g = Math.round(unit.teamColor.g * 255).toString(16).padStart(2, '0');
-    const b = Math.round(unit.teamColor.b * 255).toString(16).padStart(2, '0');
-    return `#${r}${g}${b}`;
-  }
-
+  // No-op: turn order info is now only shown in modal (hamburger button)
   function updateNextUpIndicator(): void {
-    // Update NOW line with current unit
-    if (currentUnit) {
-      nowUnitText.text = getUnitDisplayText(currentUnit);
-      nowUnitText.color = getUnitTeamColor(currentUnit);
-    } else {
-      nowUnitText.text = "--";
-      nowUnitText.color = "#888888";
-    }
-
-    // Update Next Up line
-    const predicted = predictTurnOrder(2);
-    const next = predicted.find(u => u !== currentUnit);
-
-    if (next) {
-      nextUpText.text = getUnitDisplayText(next);
-      nextUpText.color = getUnitTeamColor(next);
-    } else {
-      nextUpText.text = "--";
-      nextUpText.color = "#888888";
-    }
+    // Hamburger button doesn't show dynamic text
   }
 
   function showTurnOrderModal(): void {
@@ -4025,7 +3974,7 @@ export function createBattleScene(engine: Engine, canvas: HTMLCanvasElement, loa
   }
 
   // Event handlers
-  turnIndicatorBtn.onPointerClickObservable.add(() => {
+  turnOrderBtn.onPointerUpObservable.add(() => {
     showTurnOrderModal();
   });
 

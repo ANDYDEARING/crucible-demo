@@ -237,6 +237,12 @@ export function createLoadoutScene(
     }
   });
 
+  // Clean up RTTs before scene disposal to avoid postProcessManager errors
+  scene.onDisposeObservable.add(() => {
+    // Clear custom render targets array to prevent disposal errors
+    scene.customRenderTargets.length = 0;
+  });
+
   // Camera setup for 3D preview
   const camera = new ArcRotateCamera("cam", Math.PI / 2, Math.PI / 2.5, isDesktop ? 8 : 4, new Vector3(0, 0.8, 0), scene);
   // Don't attach camera controls - they interfere with UI scrolling
