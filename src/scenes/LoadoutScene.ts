@@ -921,10 +921,15 @@ export function createLoadoutScene(
     selectionArray: UnitSelection[],
     parent: StackPanel
   ): void {
-    // State
-    let selectedClass: UnitClass = "soldier";
-    let selectedBoost = 0;
-    let selectedStyle: "ranged" | "melee" = "ranged";
+    // State - defaults based on unit index for variety
+    // Delta (0): Soldier/Tough/Ranged, Psi (1): Operator/Deadly/Melee, Omega (2): Medic/Quick/Ranged
+    const defaultClasses: UnitClass[] = ["soldier", "operator", "medic"];
+    const defaultBoosts = [0, 1, 2]; // Tough, Deadly, Quick
+    const defaultStyles: ("ranged" | "melee")[] = ["ranged", "melee", "ranged"];
+
+    let selectedClass: UnitClass = defaultClasses[unitIndex] || "soldier";
+    let selectedBoost = defaultBoosts[unitIndex] ?? 0;
+    let selectedStyle: ("ranged" | "melee") = defaultStyles[unitIndex] || "ranged";
 
     // Card container
     const row = new Rectangle(`${playerId}Unit${unitIndex}`);
@@ -949,10 +954,11 @@ export function createLoadoutScene(
       mainGrid.addColumnDefinition(0.12);
       mainGrid.addColumnDefinition(0.88);
     } else if (isTablet) {
-      // [Greek 8%] [Buttons 50%] [Copy 42%]
+      // [Greek 8%] [Buttons 45%] [Copy 27%] [Preview 20%]
       mainGrid.addColumnDefinition(0.08);
-      mainGrid.addColumnDefinition(0.50);
-      mainGrid.addColumnDefinition(0.42);
+      mainGrid.addColumnDefinition(0.45);
+      mainGrid.addColumnDefinition(0.27);
+      mainGrid.addColumnDefinition(0.20);
     } else {
       // Desktop: [Greek 6%] [Buttons 40%] [Copy 30%] [Preview 24%]
       mainGrid.addColumnDefinition(0.06);
@@ -1010,14 +1016,15 @@ export function createLoadoutScene(
     // Row 0: Class buttons (Soldier, Operator, Medic)
     const classButtons: Button[] = [];
     ALL_CLASSES.forEach((cls, i) => {
-      const btn = createBtn(`${playerId}${unitIndex}class${i}`, CLASS_INFO[cls].name, 0, i, i === 0);
+      const btn = createBtn(`${playerId}${unitIndex}class${i}`, CLASS_INFO[cls].name, 0, i, cls === selectedClass);
       btn.onPointerClickObservable.add(() => {
         selectedClass = cls;
         classButtons.forEach((b, j) => {
           b.background = j === i ? COLORS.selected : COLORS.bgButton;
         });
+        // Randomize appearance when class changes
+        updateUnitSelection(true);
         updateCopy();
-        updateUnitSelection();
       });
       classButtons.push(btn);
     });
@@ -1025,7 +1032,7 @@ export function createLoadoutScene(
     // Row 1: Boost buttons (Tough, Deadly, Quick)
     const boostButtons: Button[] = [];
     BOOST_INFO.forEach((boost, i) => {
-      const btn = createBtn(`${playerId}${unitIndex}boost${i}`, boost.name, 1, i, i === 0);
+      const btn = createBtn(`${playerId}${unitIndex}boost${i}`, boost.name, 1, i, i === selectedBoost);
       btn.onPointerClickObservable.add(() => {
         selectedBoost = i;
         boostButtons.forEach((b, j) => {
@@ -1040,7 +1047,7 @@ export function createLoadoutScene(
     // Row 2: Weapon buttons (Ranged, Melee) + Edit circle
     const weaponButtons: Button[] = [];
     (["ranged", "melee"] as const).forEach((style, i) => {
-      const btn = createBtn(`${playerId}${unitIndex}weapon${i}`, WEAPON_INFO[style].label, 2, i, i === 0);
+      const btn = createBtn(`${playerId}${unitIndex}weapon${i}`, WEAPON_INFO[style].label, 2, i, style === selectedStyle);
       btn.onPointerClickObservable.add(() => {
         selectedStyle = style;
         weaponButtons.forEach((b, j) => {
@@ -1128,6 +1135,14 @@ export function createLoadoutScene(
     let tooltipBackdrop: Rectangle | null = null;
     let tooltipOverlay: Rectangle | null = null;
 
+    // Mobile RTT preview variables
+    let mobilePreviewMesh: AbstractMesh | null = null;
+    let mobilePreviewAnims: AnimationGroup[] = [];
+    let mobilePreviewMeshes: AbstractMesh[] = [];
+    let mobileLoadedModelKey = "";
+    let mobilePreviewImage: Image | null = null;
+    let loadMobilePreview: (() => void) | null = null;
+
     if (isMobile) {
       // Info circle (magnifying glass) - next to edit button
       const infoCircle = new Rectangle(`${playerId}${unitIndex}info`);
@@ -1143,7 +1158,7 @@ export function createLoadoutScene(
       const infoIcon = new TextBlock();
       infoIcon.text = "⌕";  // Monochrome magnifying glass
       infoIcon.color = COLORS.textSecondary;
-      infoIcon.fontSize = isMobile ? 18 : 20;
+      infoIcon.fontSize = 18;
       infoCircle.addControl(infoIcon);
 
       infoCircle.onPointerEnterObservable.add(() => {
@@ -1170,11 +1185,10 @@ export function createLoadoutScene(
         if (tooltipOverlay) tooltipOverlay.isVisible = false;
       });
 
-      // Tooltip overlay for mobile
+      // Tooltip overlay for mobile - fixed height to accommodate preview
       tooltipOverlay = new Rectangle(`${playerId}${unitIndex}tooltip`);
       tooltipOverlay.width = "85%";
-      tooltipOverlay.height = "auto";
-      tooltipOverlay.adaptHeightToChildren = true;
+      tooltipOverlay.height = "420px";
       tooltipOverlay.background = COLORS.bgPanel;
       tooltipOverlay.cornerRadius = 12;
       tooltipOverlay.thickness = 2;
@@ -1184,18 +1198,198 @@ export function createLoadoutScene(
       tooltipOverlay.isVisible = false;
       gui.addControl(tooltipOverlay);
 
-      // Inner container for padding (Rectangle padding doesn't work well)
-      const tooltipInner = new Rectangle();
-      tooltipInner.width = "100%";
-      tooltipInner.height = "auto";
-      tooltipInner.adaptHeightToChildren = true;
-      tooltipInner.thickness = 0;
-      tooltipInner.background = "transparent";
-      tooltipInner.paddingTop = "24px";
-      tooltipInner.paddingBottom = "28px";
-      tooltipInner.paddingLeft = "24px";
-      tooltipInner.paddingRight = "24px";
-      tooltipOverlay.addControl(tooltipInner);
+      // Stack for preview + text
+      const tooltipStack = new StackPanel();
+      tooltipStack.width = "100%";
+      tooltipStack.isVertical = true;
+      tooltipStack.paddingTop = "16px";
+      tooltipStack.paddingBottom = "20px";
+      tooltipOverlay.addControl(tooltipStack);
+
+      // Preview container at top
+      const mobilePreviewContainer = new Rectangle();
+      mobilePreviewContainer.width = "140px";
+      mobilePreviewContainer.height = "140px";
+      mobilePreviewContainer.thickness = 0;
+      mobilePreviewContainer.background = COLORS.bgButton;
+      mobilePreviewContainer.cornerRadius = 8;
+      tooltipStack.addControl(mobilePreviewContainer);
+
+      // RTT setup for mobile preview
+      const mobileRttSize = 256;
+      const mobileRtt = new RenderTargetTexture(`mobileRtt_${playerId}_${unitIndex}`, mobileRttSize, scene, false);
+      mobileRtt.clearColor = new Color4(0.1, 0.08, 0.06, 1);
+      scene.customRenderTargets.push(mobileRtt);
+
+      // Preview camera for mobile
+      const mobilePreviewCamera = new ArcRotateCamera(
+        `mobilePreviewCam_${playerId}_${unitIndex}`,
+        Math.PI / 2 + 0.3,
+        Math.PI / 2.5,
+        2.5,
+        new Vector3(0, 0.9, 0),
+        scene
+      );
+      mobileRtt.activeCamera = mobilePreviewCamera;
+
+      // Force square aspect ratio
+      const originalGetEngine = mobilePreviewCamera.getEngine.bind(mobilePreviewCamera);
+      mobilePreviewCamera.getEngine = () => {
+        const eng = originalGetEngine();
+        return { ...eng, getAspectRatio: () => 1 } as any;
+      };
+
+      // Unique layer mask for mobile preview (offset by 6 to avoid collision with desktop)
+      const mobileLayerMask = 0x10000000 << (playerId === "player1" ? unitIndex + 6 : unitIndex + 9);
+      mobilePreviewCamera.layerMask = mobileLayerMask;
+
+      // Canvas for RTT pixels
+      const mobileCanvas = document.createElement("canvas");
+      mobileCanvas.width = mobileRttSize;
+      mobileCanvas.height = mobileRttSize;
+      const mobileCtx = mobileCanvas.getContext("2d")!;
+
+      // GUI Image for preview
+      mobilePreviewImage = new Image(`mobilePreviewImg_${playerId}_${unitIndex}`, "");
+      mobilePreviewImage.stretch = Image.STRETCH_UNIFORM;
+      mobilePreviewImage.width = "100%";
+      mobilePreviewImage.height = "100%";
+      mobilePreviewContainer.addControl(mobilePreviewImage);
+
+      // Update canvas from RTT
+      let mobileFrameCount = 0;
+      mobileRtt.onAfterRenderObservable.add(() => {
+        mobileFrameCount++;
+        if (mobileFrameCount % 3 !== 0) return;
+
+        mobileRtt.readPixels()?.then((buffer) => {
+          if (!buffer || !mobilePreviewImage) return;
+          const pixels = new Uint8Array(buffer.buffer);
+          const imageData = mobileCtx.createImageData(mobileRttSize, mobileRttSize);
+
+          for (let y = 0; y < mobileRttSize; y++) {
+            for (let x = 0; x < mobileRttSize; x++) {
+              const srcIdx = ((mobileRttSize - 1 - y) * mobileRttSize + x) * 4;
+              const dstIdx = (y * mobileRttSize + x) * 4;
+              imageData.data[dstIdx] = pixels[srcIdx];
+              imageData.data[dstIdx + 1] = pixels[srcIdx + 1];
+              imageData.data[dstIdx + 2] = pixels[srcIdx + 2];
+              imageData.data[dstIdx + 3] = pixels[srcIdx + 3];
+            }
+          }
+          mobileCtx.putImageData(imageData, 0, 0);
+          mobilePreviewImage.source = mobileCanvas.toDataURL();
+        });
+      });
+
+      // Update mobile preview appearance
+      const updateMobilePreviewAppearance = (): void => {
+        if (mobilePreviewMeshes.length === 0) return;
+
+        const customization = selectionArray[unitIndex]?.customization;
+        const headIndex = customization?.head ?? 0;
+        const isMelee = selectedStyle === "melee";
+
+        const teamColorHex = playerId === "player1"
+          ? selections.player1TeamColor
+          : selections.player2TeamColor;
+        const teamColor = hexToColor3(teamColorHex || "#ff0000");
+
+        mobilePreviewMeshes.forEach(m => {
+          if (m.material && m.material.name === "TeamMain") {
+            const mat = m.material as PBRMaterial;
+            mat.albedoColor = teamColor;
+          }
+
+          for (let i = 0; i < 4; i++) {
+            const headName = `Head_00${i + 1}`;
+            if (m.name.includes(headName)) {
+              m.setEnabled(i === headIndex);
+            }
+          }
+
+          const meshNameLower = m.name.toLowerCase();
+          if (meshNameLower.includes("sword")) {
+            m.setEnabled(isMelee);
+          } else if (meshNameLower.includes("pistol")) {
+            m.setEnabled(!isMelee);
+          }
+        });
+
+        mobilePreviewAnims.forEach(ag => ag.stop());
+        const idleAnim = isMelee
+          ? mobilePreviewAnims.find(ag => ag.name === "Idle_Sword")
+          : mobilePreviewAnims.find(ag => ag.name === "Idle_Gun");
+        if (idleAnim) {
+          idleAnim.start(true);
+        }
+      };
+
+      // Load mobile preview model
+      loadMobilePreview = (): void => {
+        const classData = getClassData(selectedClass);
+        const body = selectionArray[unitIndex]?.customization?.body || "male";
+        const gender = body === "male" ? "m" : "f";
+        const modelKey = `${classData.modelFile}_${gender}`;
+
+        if (modelKey === mobileLoadedModelKey && mobilePreviewMesh) {
+          updateMobilePreviewAppearance();
+          return;
+        }
+
+        if (mobilePreviewMesh) {
+          if (mobileRtt.renderList) {
+            mobileRtt.renderList.length = 0;
+          }
+          mobilePreviewMesh.dispose();
+          mobilePreviewMesh = null;
+          mobilePreviewMeshes = [];
+        }
+        mobilePreviewAnims.forEach(a => a.stop());
+        mobilePreviewAnims = [];
+
+        const modelPath = `/models/${modelKey}.glb`;
+        mobileLoadedModelKey = modelKey;
+
+        SceneLoader.ImportMeshAsync("", modelPath, "", scene).then((result) => {
+          mobilePreviewMesh = result.meshes[0];
+          mobilePreviewMeshes = result.meshes;
+          mobilePreviewMesh.position = new Vector3(0, 0, 0);
+          mobilePreviewMesh.scaling = new Vector3(0.9, 0.9, 0.9);
+          mobilePreviewMesh.rotation = new Vector3(0, Math.PI * 0.15, 0);
+
+          result.meshes.forEach(m => {
+            m.layerMask = mobileLayerMask;
+            mobileRtt.renderList?.push(m);
+          });
+
+          mobilePreviewAnims = result.animationGroups;
+          updateMobilePreviewAppearance();
+        }).catch((err) => {
+          console.warn("Failed to load mobile preview:", err);
+        });
+      };
+
+      // Register for team color changes
+      previewRefreshCallbacks[playerId as "player1" | "player2"].push(updateMobilePreviewAppearance);
+
+      // Note: Initial load happens via updateCopy() at end of createUnitRow
+
+      // Spacer between preview and text
+      const tooltipSpacer = new Rectangle();
+      tooltipSpacer.width = "100%";
+      tooltipSpacer.height = "16px";
+      tooltipSpacer.thickness = 0;
+      tooltipStack.addControl(tooltipSpacer);
+
+      // Text container with padding
+      const tooltipTextContainer = new Rectangle();
+      tooltipTextContainer.width = "100%";
+      tooltipTextContainer.height = "220px";
+      tooltipTextContainer.thickness = 0;
+      tooltipTextContainer.paddingLeft = "24px";
+      tooltipTextContainer.paddingRight = "24px";
+      tooltipStack.addControl(tooltipTextContainer);
 
       // Single text block for unit description
       const tooltipText = new TextBlock();
@@ -1203,15 +1397,16 @@ export function createLoadoutScene(
       tooltipText.color = COLORS.textPrimary;
       tooltipText.fontSize = fontSize;
       tooltipText.textWrapping = true;
-      tooltipText.resizeToFit = true;
       tooltipText.textHorizontalAlignment = Control.HORIZONTAL_ALIGNMENT_LEFT;
-      tooltipInner.addControl(tooltipText);
+      tooltipText.textVerticalAlignment = Control.VERTICAL_ALIGNMENT_TOP;
+      tooltipTextContainer.addControl(tooltipText);
 
       // Store reference for updates
       copyText = tooltipText;
 
       infoCircle.onPointerClickObservable.add(() => {
         if (copyText) copyText.text = getUnitDescription(selectedClass, selectedBoost, selectedStyle);
+        if (loadMobilePreview) loadMobilePreview();
         if (tooltipBackdrop) tooltipBackdrop.isVisible = true;
         if (tooltipOverlay) tooltipOverlay.isVisible = true;
       });
@@ -1239,12 +1434,12 @@ export function createLoadoutScene(
       copyContainer.addControl(copyText);
     }
 
-    // === COLUMN 3: Preview (Desktop only) - RTT based ===
+    // === COLUMN 3: Preview (Tablet & Desktop) - RTT based ===
     let unitPreviewMesh: AbstractMesh | null = null;
     let unitPreviewAnims: AnimationGroup[] = [];
     let loadUnitPreview: (() => void) | null = null;
 
-    if (isDesktop) {
+    if (!isMobile) {
       const previewContainer = new Rectangle();
       previewContainer.width = "100%";
       previewContainer.height = "100%";
@@ -1427,8 +1622,7 @@ export function createLoadoutScene(
       // Register callback for team color changes
       previewRefreshCallbacks[playerId as "player1" | "player2"].push(updatePreviewAppearance);
 
-      // Load initial preview
-      loadUnitPreview();
+      // Note: Initial load happens via updateCopy() at end of createUnitRow
     }
 
     // Update copy text and preview
@@ -1436,50 +1630,58 @@ export function createLoadoutScene(
       if (copyText) {
         copyText.text = getUnitDescription(selectedClass, selectedBoost, selectedStyle);
       }
-      // Update 3D preview on desktop
+      // Update 3D preview on desktop or mobile
       if (loadUnitPreview) {
         loadUnitPreview();
       }
+      if (loadMobilePreview) {
+        loadMobilePreview();
+      }
     }
 
-    function updateUnitSelection(): void {
+    // Helper to generate random customization
+    function randomizeCustomization(): UnitCustomization {
+      return {
+        body: Math.random() > 0.5 ? "male" : "female",
+        combatStyle: selectedStyle,
+        handedness: Math.random() > 0.5 ? "right" : "left",
+        head: Math.floor(Math.random() * 4),
+        hairColor: Math.floor(Math.random() * HAIR_COLORS.length),
+        eyeColor: Math.floor(Math.random() * EYE_COLORS.length),
+        skinTone: Math.floor(Math.random() * SKIN_TONES.length),
+      };
+    }
+
+    function updateUnitSelection(forceRandomize = false): void {
       while (selectionArray.length < unitIndex + 1) {
         selectionArray.push({
           unitClass: "soldier",
-          customization: {
-            body: "male",
-            combatStyle: "ranged",
-            handedness: "right",
-            head: 0,
-            hairColor: 0,
-            eyeColor: 2,
-            skinTone: 4,
-          },
+          customization: randomizeCustomization(),
         });
       }
 
       const existingCustomization = selectionArray[unitIndex]?.customization;
+
+      // Randomize if forced (class change) or if no existing customization
+      const shouldRandomize = forceRandomize || !existingCustomization;
+
       selectionArray[unitIndex] = {
         unitClass: selectedClass,
-        customization: existingCustomization ? {
-          ...existingCustomization,
-          combatStyle: selectedStyle,
-        } : {
-          body: Math.random() > 0.5 ? "male" : "female",
-          combatStyle: selectedStyle,
-          handedness: Math.random() > 0.5 ? "right" : "left",
-          head: Math.floor(Math.random() * 4),
-          hairColor: Math.floor(Math.random() * 10),
-          eyeColor: Math.floor(Math.random() * 8),
-          skinTone: Math.floor(Math.random() * 10),
-        },
+        customization: shouldRandomize
+          ? randomizeCustomization()
+          : {
+              ...existingCustomization,
+              combatStyle: selectedStyle,
+            },
         boost: selectedBoost,
       };
 
       updateStartButton();
     }
 
-    updateUnitSelection();
+    // Initialize selection with randomized customization, then update preview
+    updateUnitSelection(true);
+    updateCopy();
   }
 
   return scene;
