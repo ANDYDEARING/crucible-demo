@@ -3544,7 +3544,7 @@ export function createBattleScene(engine: Engine, canvas: HTMLCanvasElement, loa
   // Turn indicator removed - all info now in command menu popup
 
   // ============================================
-  // CAMERA MODE TOGGLE (touch devices only)
+  // CAMERA MODE TOGGLE (compass button)
   // ============================================
   let cameraMode: "rotate" | "pan" = "rotate";
 
@@ -3553,88 +3553,49 @@ export function createBattleScene(engine: Engine, canvas: HTMLCanvasElement, loa
   let lastPanX = 0;
   let lastPanY = 0;
 
-  // Camera mode toggle container - top right, shows both icons
-  const cameraModeContainer = new Rectangle("cameraModeContainer");
-  cameraModeContainer.width = "90px";
-  cameraModeContainer.height = "44px";
-  cameraModeContainer.background = "#333333";
-  cameraModeContainer.cornerRadius = 22;
-  cameraModeContainer.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_RIGHT;
-  cameraModeContainer.verticalAlignment = Control.VERTICAL_ALIGNMENT_TOP;
-  cameraModeContainer.left = "-15px";
-  cameraModeContainer.top = "15px";
-  cameraModeContainer.thickness = 2;
-  cameraModeContainer.color = "#555555";
-  cameraModeContainer.zIndex = 50;
-  cameraModeContainer.isPointerBlocker = true;
+  // Compass button - top right, toggles pan mode
+  const compassBtn = Button.CreateSimpleButton("compassBtn", "");
+  compassBtn.width = "44px";
+  compassBtn.height = "44px";
+  compassBtn.background = "rgba(40, 40, 50, 0.9)";
+  compassBtn.cornerRadius = 22;
+  compassBtn.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_RIGHT;
+  compassBtn.verticalAlignment = Control.VERTICAL_ALIGNMENT_TOP;
+  compassBtn.left = "-15px";
+  compassBtn.top = "15px";
+  compassBtn.thickness = 2;
+  compassBtn.color = "#666666";
+  compassBtn.zIndex = 50;
+  compassBtn.isPointerBlocker = true;
 
-  // Grid to hold both toggle options
-  const toggleGrid = new Grid("toggleGrid");
-  toggleGrid.addColumnDefinition(0.5);
-  toggleGrid.addColumnDefinition(0.5);
-  cameraModeContainer.addControl(toggleGrid);
-
-  // Rotate button (left side)
-  const rotateBtn = Button.CreateSimpleButton("rotateMode", "");
-  rotateBtn.width = "40px";
-  rotateBtn.height = "36px";
-  rotateBtn.background = "#555555";
-  rotateBtn.cornerRadius = 18;
-  rotateBtn.thickness = 0;
-  rotateBtn.isPointerBlocker = true;
-  const rotateIcon = new TextBlock("rotateIcon", "⟳");
-  rotateIcon.fontSize = 20;
-  rotateIcon.color = "white";
-  rotateIcon.top = "-1px";  // Nudge up to center visually
-  rotateBtn.addControl(rotateIcon);
-  toggleGrid.addControl(rotateBtn, 0, 0);
-
-  // Pan button (right side)
-  const panBtn = Button.CreateSimpleButton("panMode", "");
-  panBtn.width = "40px";
-  panBtn.height = "36px";
-  panBtn.background = "transparent";
-  panBtn.cornerRadius = 18;
-  panBtn.thickness = 0;
-  panBtn.isPointerBlocker = true;
-  const panIcon = new TextBlock("panIcon", "✥");
-  panIcon.fontSize = 18;
-  panIcon.color = "#888888";
-  panBtn.addControl(panIcon);
-  toggleGrid.addControl(panBtn, 0, 1);
+  const compassIcon = new TextBlock("compassIcon", "✥");
+  compassIcon.fontSize = 20;
+  compassIcon.color = "#888888";
+  compassIcon.isHitTestVisible = false;
+  compassBtn.addControl(compassIcon);
 
   function updateCameraModeButton(): void {
     if (cameraMode === "rotate") {
-      // Highlight rotate button
-      rotateBtn.background = "#555555";
-      rotateIcon.color = "white";
-      panBtn.background = "transparent";
-      panIcon.color = "#888888";
+      // Gray when inactive (rotate mode)
+      compassBtn.background = "rgba(40, 40, 50, 0.9)";
+      compassBtn.color = "#666666";
+      compassIcon.color = "#888888";
       // Re-enable camera's built-in rotation controls
       camera.attachControl(true);
     } else {
-      // Highlight pan button
-      rotateBtn.background = "transparent";
-      rotateIcon.color = "#888888";
-      panBtn.background = "#664422";
-      panIcon.color = "white";
+      // Yellow when active (pan mode)
+      compassBtn.background = "rgba(60, 50, 20, 0.9)";
+      compassBtn.color = "#ffcc44";
+      compassIcon.color = "#ffcc44";
       // Detach camera controls - we'll handle panning manually
       camera.detachControl();
     }
   }
 
-  rotateBtn.onPointerUpObservable.add(() => {
-    if (cameraMode !== "rotate") {
-      cameraMode = "rotate";
-      updateCameraModeButton();
-    }
-  });
-
-  panBtn.onPointerUpObservable.add(() => {
-    if (cameraMode !== "pan") {
-      cameraMode = "pan";
-      updateCameraModeButton();
-    }
+  compassBtn.onPointerUpObservable.add(() => {
+    // Toggle between rotate and pan
+    cameraMode = cameraMode === "rotate" ? "pan" : "rotate";
+    updateCameraModeButton();
   });
 
   // Custom pan handling when in pan mode
@@ -3721,7 +3682,7 @@ export function createBattleScene(engine: Engine, canvas: HTMLCanvasElement, loa
   });
 
   // Show camera mode toggle on all devices (iPad Pro users need it too)
-  gui.addControl(cameraModeContainer);
+  gui.addControl(compassBtn);
   updateCameraModeButton();
 
   // ============================================
