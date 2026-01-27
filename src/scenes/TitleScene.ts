@@ -65,6 +65,35 @@ export function createTitleScene(
 
   const gui = AdvancedDynamicTexture.CreateFullscreenUI("UI");
 
+  // === RESPONSIVE SIZING ===
+  // Breakpoints: mobile (<600), tablet (600-1024), desktop (>1024)
+  // Also detect landscape phones (short height) to use compact scaling
+  const screenWidth = engine.getRenderWidth();
+  const screenHeight = engine.getRenderHeight();
+  const isLandscapePhone = screenHeight < 500 && screenWidth < 1024;
+  const isTablet = !isLandscapePhone && screenWidth >= 600 && screenWidth < 1024;
+  const isDesktop = screenWidth >= 1024;
+
+  // Scale factors based on screen size (mobile = 1.0 baseline)
+  // Titles scale more aggressively, buttons stay modest
+  // Landscape phones: bigger title, smaller buttons to fit
+  const titleScale = isDesktop ? 2.2 : isTablet ? 1.7 : isLandscapePhone ? 1.0 : 1.0;
+  const buttonScale = isDesktop ? 1.3 : isTablet ? 1.15 : isLandscapePhone ? 0.7 : 1.0;
+  const buttonWidthPercent = isDesktop ? "30%" : isTablet ? "45%" : isLandscapePhone ? "30%" : "70%";
+  const dividerWidthPercent = isDesktop ? "30%" : isTablet ? "45%" : isLandscapePhone ? "40%" : "70%";
+
+  // Font sizes
+  const subtitleFontSize = Math.round(24 * titleScale);
+  const mainTitleFontSize = Math.round(64 * titleScale);
+  const buttonFontSize = Math.round(18 * buttonScale);
+
+  // Heights
+  const subtitleHeight = `${Math.round(35 * titleScale)}px`;
+  const mainTitleHeight = `${Math.round(75 * titleScale)}px`;
+  const buttonHeight = `${Math.round(50 * buttonScale)}px`;
+  const spacerHeight = `${Math.round(40 * titleScale)}px`;
+  const buttonSpacerHeight = `${Math.round(15 * buttonScale)}px`;
+
   // === BACKGROUND: Rising heat glow from below ===
 
   // Base gradient - warm glow rising from bottom (full height, gradient handles fade)
@@ -172,7 +201,7 @@ export function createTitleScene(
   const panel = new StackPanel();
   panel.width = "100%";
   panel.verticalAlignment = Control.VERTICAL_ALIGNMENT_CENTER;
-  panel.top = "-5%";
+  panel.top = isLandscapePhone ? "0%" : "-5%";
   gui.addControl(panel);
 
   // Fade-in state - using centralized timing constants
@@ -181,51 +210,51 @@ export function createTitleScene(
   const fadeInDuration = TITLE_FADE_IN_DURATION;
   const fadeInDelay = TITLE_FADE_IN_DELAY;
 
-  // Main title - Bebas Neue for that industrial T2 feel
+  // Subtitle line - smaller, above main title
   const titleLine1 = new TextBlock();
   titleLine1.text = "T H E   S U N S E T   G A M B I T";
   titleLine1.color = "rgba(232, 196, 160, 0)"; // Start invisible
   titleLine1.fontFamily = "'Bebas Neue', 'Arial Black', sans-serif";
   titleLine1.fontWeight = "400";
-  titleLine1.fontSize = 36;
-  titleLine1.height = "55px";
+  titleLine1.fontSize = subtitleFontSize;
+  titleLine1.height = subtitleHeight;
   titleLine1.shadowColor = "rgba(255, 100, 20, 0)";
-  titleLine1.shadowBlur = 20;
-  titleLine1.shadowOffsetY = 2;
+  titleLine1.shadowBlur = 15 * titleScale;
+  titleLine1.shadowOffsetY = 1 * titleScale;
   panel.addControl(titleLine1);
 
-  // Subtitle - larger, more dramatic
+  // Main title - BIG, fills width on mobile
   const titleLine2 = new TextBlock();
   titleLine2.text = "C R U C I B L E";
   titleLine2.color = "rgba(255, 179, 102, 0)"; // Start invisible
   titleLine2.fontFamily = "'Bebas Neue', 'Arial Black', sans-serif";
   titleLine2.fontWeight = "400";
-  titleLine2.fontSize = 96;
-  titleLine2.height = "120px";
+  titleLine2.fontSize = mainTitleFontSize;
+  titleLine2.height = mainTitleHeight;
   titleLine2.shadowColor = "rgba(255, 80, 0, 0)";
-  titleLine2.shadowBlur = 30;
-  titleLine2.shadowOffsetY = 4;
+  titleLine2.shadowBlur = 25 * titleScale;
+  titleLine2.shadowOffsetY = 3 * titleScale;
   panel.addControl(titleLine2);
 
   // Thin decorative line
   const divider = new Rectangle();
-  divider.width = "300px";
-  divider.height = "2px";
+  divider.width = dividerWidthPercent;
+  divider.height = `${Math.max(2, Math.round(2 * titleScale))}px`;
   divider.thickness = 0;
   divider.background = "rgba(255, 150, 80, 0)"; // Start invisible
   panel.addControl(divider);
 
   // Spacer
   const spacer = new TextBlock();
-  spacer.height = "60px";
+  spacer.height = spacerHeight;
   spacer.text = "";
   panel.addControl(spacer);
 
   // Start fade-in after fonts load (including button font size)
   Promise.all([
-    document.fonts.load("36px 'Bebas Neue'"),
-    document.fonts.load("96px 'Bebas Neue'"),
-    document.fonts.load("20px 'Bebas Neue'"),
+    document.fonts.load(`${subtitleFontSize}px 'Bebas Neue'`),
+    document.fonts.load(`${mainTitleFontSize}px 'Bebas Neue'`),
+    document.fonts.load(`${buttonFontSize}px 'Bebas Neue'`),
   ]).then(() => {
     // Force buttons to recalculate layout now that fonts are loaded
     for (const btn of modeButtons) {
@@ -243,12 +272,12 @@ export function createTitleScene(
   // Helper to create a styled button
   function createModeButton(text: string, mode: GameMode): Button {
     const button = Button.CreateSimpleButton(`mode_${mode}`, text);
-    button.width = "200px";
-    button.height = "45px";
+    button.width = buttonWidthPercent;
+    button.height = buttonHeight;
     button.background = "rgba(40, 20, 15, 0.6)";
-    button.cornerRadius = 2;
+    button.cornerRadius = Math.round(4 * buttonScale);
     button.thickness = 1;
-    button.color = "#b89070";
+    button.color = TITLE_TEXT_COLORS.buttonText;
     button.hoverCursor = "pointer";
     button.alpha = 0; // Start invisible, fade in with title
 
@@ -256,7 +285,8 @@ export function createTitleScene(
     if (button.textBlock) {
       button.textBlock.color = TITLE_TEXT_COLORS.buttonText;
       button.textBlock.fontFamily = "'Bebas Neue', 'Arial Black', sans-serif";
-      button.textBlock.fontSize = 20;
+      button.textBlock.fontSize = buttonFontSize;
+      button.textBlock.textHorizontalAlignment = Control.HORIZONTAL_ALIGNMENT_CENTER;
     }
 
     // Hover effects
@@ -292,7 +322,7 @@ export function createTitleScene(
 
   // Small spacer between buttons
   const buttonSpacer = new TextBlock();
-  buttonSpacer.height = "15px";
+  buttonSpacer.height = buttonSpacerHeight;
   buttonSpacer.text = "";
   panel.addControl(buttonSpacer);
 

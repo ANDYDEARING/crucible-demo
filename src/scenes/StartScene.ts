@@ -38,7 +38,7 @@ export function createStartScene(
   prompt.text = "Click to Begin";
   prompt.color = "white";
   prompt.fontFamily = "'Exo 2', sans-serif";
-  prompt.fontSize = 48;
+  prompt.fontSize = 24;
   prompt.isHitTestVisible = false;
   gui.addControl(prompt);
 

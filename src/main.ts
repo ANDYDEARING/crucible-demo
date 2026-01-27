@@ -48,7 +48,7 @@ export function navigateTo(sceneName: SceneName): void {
       currentScene = createLoadoutScene(engine, canvas, (loadout: Loadout) => {
         currentLoadout = loadout;
         navigateTo("battle");
-      });
+      }, navigateTo);
       break;
     case "battle":
       currentScene = createBattleScene(engine, canvas, currentLoadout);

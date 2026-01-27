@@ -141,6 +141,9 @@ export const BASE_UNIT_SPEED = 1;
 /** Damage multiplier for melee attacks (vs ranged) */
 export const MELEE_DAMAGE_MULTIPLIER = 2;
 
+/** Multiplier for loadout boosts (HP, Damage, Speed) - 0.25 = 25% bonus */
+export const BOOST_MULTIPLIER = 0.25;
+
 // =============================================================================
 // HP BAR THRESHOLDS
 // =============================================================================

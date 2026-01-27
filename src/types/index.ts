@@ -10,7 +10,7 @@
  */
 
 import type { Mesh, AbstractMesh, AnimationGroup, Color3 } from "@babylonjs/core";
-import type { Rectangle } from "@babylonjs/gui";
+import type { Rectangle, TextBlock } from "@babylonjs/gui";
 
 // =============================================================================
 // SCENE NAVIGATION
@@ -61,6 +61,7 @@ export type GameMode = "local-pvp" | "local-pve";
 export interface UnitSelection {
   unitClass: UnitClass;
   customization?: UnitCustomization;
+  boost?: number;  // Boost selection (0, 1, or 2) - feature coming soon
 }
 
 /** Complete loadout configuration for a battle */
@@ -207,6 +208,7 @@ export interface Unit {
   // Visual references (Babylon.js)
   hpBar?: Rectangle;
   hpBarBg?: Rectangle;
+  designationLabel?: TextBlock;
   originalColor: Color3;
   modelRoot?: AbstractMesh;
   modelMeshes?: AbstractMesh[];
@@ -223,6 +225,7 @@ export interface Unit {
   speedBonus: number;   // Bonus from skipping, consumed after next turn
   accumulator: number;  // Builds up until >= threshold, then unit acts
   loadoutIndex: number; // Original position in loadout for tie-breaking
+  boost: number;        // Boost index (0=HP, 1=Damage, 2=Speed)
 
   // Facing system
   facing: FacingConfig;
