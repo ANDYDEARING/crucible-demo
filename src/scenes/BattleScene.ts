@@ -13,6 +13,7 @@ import {
   SceneLoader,
   AbstractMesh,
   PBRMaterial,
+  Matrix,
 } from "@babylonjs/core";
 import "@babylonjs/loaders/glTF";
 import { AdvancedDynamicTexture, TextBlock, Button, Rectangle, StackPanel, Grid, Control, ScrollViewer } from "@babylonjs/gui";
@@ -1595,13 +1596,13 @@ export function createBattleScene(engine: Engine, canvas: HTMLCanvasElement, loa
       originalFacing: unit.facing.currentAngle,
     };
 
-    // Call turn start callback (for command menu update)
+    // Call turn start callback (for command menu update and highlighting)
     if (onTurnStartCallback) {
       onTurnStartCallback(unit);
     }
 
-    // Highlight the active unit's tile yellow
-    highlightActiveUnitTile();
+    // Note: highlightAllAvailableActions() is called in onTurnStartCallback
+    // which handles all highlighting including medic green self-heal
 
     // Notify controller that turn has started
     // This allows AI/network controllers to take over
@@ -2074,7 +2075,6 @@ export function createBattleScene(engine: Engine, canvas: HTMLCanvasElement, loa
     if (classData.ability === "Heal" && unit.hp < unit.maxHp) {
       // Medic can self-heal - green highlight
       currentTile.material = healableMaterial;
-      healableUnits = [unit]; // Self is healable
     } else if (classData.ability === "Conceal" && !unit.isConcealed) {
       // Operator can conceal - yellow highlight
       currentTile.material = selectedMaterial;
@@ -2091,13 +2091,18 @@ export function createBattleScene(engine: Engine, canvas: HTMLCanvasElement, loa
     if (classData.ability === "Heal") {
       const allies = getHealableAllies(unit, effectiveX, effectiveZ);
       for (const ally of allies) {
-        if (ally !== unit) { // Skip self, already handled
+        if (ally !== unit) { // Skip self, already handled above
           const tile = tiles[ally.gridX][ally.gridZ];
           tile.material = healableMaterial;
           highlightedTiles.push(tile);
         }
       }
-      healableUnits = allies;
+      // Include self in healableUnits if damaged
+      if (unit.hp < unit.maxHp) {
+        healableUnits = allies.includes(unit) ? allies : [...allies, unit];
+      } else {
+        healableUnits = allies;
+      }
     }
 
     // Update action buttons visibility
@@ -3759,25 +3764,69 @@ export function createBattleScene(engine: Engine, canvas: HTMLCanvasElement, loa
     return result;
   }
 
-  // "Next Up" button in top left
-  const nextUpBtn = Button.CreateSimpleButton("nextUpBtn", "");
-  nextUpBtn.width = isTouch ? "140px" : "160px";
-  nextUpBtn.height = "36px";
-  nextUpBtn.background = "rgba(20, 20, 30, 0.8)";
-  nextUpBtn.cornerRadius = 8;
-  nextUpBtn.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_LEFT;
-  nextUpBtn.verticalAlignment = Control.VERTICAL_ALIGNMENT_TOP;
-  nextUpBtn.left = "15px";
-  nextUpBtn.top = "15px";
-  nextUpBtn.thickness = 1;
-  nextUpBtn.color = "#555555";
+  // Turn indicator button in top left - shows NOW and Next Up, clickable for modal
+  const turnIndicatorBtn = Button.CreateSimpleButton("turnIndicatorBtn", "");
+  turnIndicatorBtn.width = "200px";
+  turnIndicatorBtn.height = "60px";
+  turnIndicatorBtn.background = "rgba(20, 20, 30, 0.8)";
+  turnIndicatorBtn.cornerRadius = 8;
+  turnIndicatorBtn.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_LEFT;
+  turnIndicatorBtn.verticalAlignment = Control.VERTICAL_ALIGNMENT_TOP;
+  turnIndicatorBtn.left = "15px";
+  turnIndicatorBtn.top = "15px";
+  turnIndicatorBtn.thickness = 2;
+  turnIndicatorBtn.color = "white";
+
+  // Stack for two-line layout
+  const turnIndicatorStack = new StackPanel("turnIndicatorStack");
+  turnIndicatorStack.isVertical = true;
+  turnIndicatorStack.paddingLeft = "8px";
+  turnIndicatorStack.paddingRight = "8px";
+  turnIndicatorBtn.addControl(turnIndicatorStack);
+
+  // NOW line
+  const nowLineStack = new StackPanel("nowLineStack");
+  nowLineStack.isVertical = false;
+  nowLineStack.height = "22px";
+  turnIndicatorStack.addControl(nowLineStack);
+
+  const nowLabel = new TextBlock("nowLabel");
+  nowLabel.text = "NOW: ";
+  nowLabel.fontSize = 12;
+  nowLabel.fontWeight = "bold";
+  nowLabel.color = "#ffff66";
+  nowLabel.resizeToFit = true;
+  nowLineStack.addControl(nowLabel);
+
+  const nowUnitText = new TextBlock("nowUnitText");
+  nowUnitText.text = "...";
+  nowUnitText.fontSize = 12;
+  nowUnitText.fontWeight = "bold";
+  nowUnitText.color = "#888888";
+  nowUnitText.resizeToFit = true;
+  nowLineStack.addControl(nowUnitText);
+
+  // Next Up line
+  const nextLineStack = new StackPanel("nextLineStack");
+  nextLineStack.isVertical = false;
+  nextLineStack.height = "22px";
+  turnIndicatorStack.addControl(nextLineStack);
+
+  const nextUpLabel = new TextBlock("nextUpLabel");
+  nextUpLabel.text = "Next: ";
+  nextUpLabel.fontSize = 11;
+  nextUpLabel.color = "white";
+  nextUpLabel.resizeToFit = true;
+  nextLineStack.addControl(nextUpLabel);
 
   const nextUpText = new TextBlock("nextUpText");
-  nextUpText.text = "Next Up: ...";
-  nextUpText.fontSize = isTouch ? 12 : 14;
+  nextUpText.text = "...";
+  nextUpText.fontSize = 11;
   nextUpText.color = "#888888";
-  nextUpBtn.addControl(nextUpText);
-  gui.addControl(nextUpBtn);
+  nextUpText.resizeToFit = true;
+  nextLineStack.addControl(nextUpText);
+
+  gui.addControl(turnIndicatorBtn);
 
   // Turn order modal
   const turnOrderBackdrop = new Rectangle("turnOrderBackdrop");
@@ -3832,33 +3881,43 @@ export function createBattleScene(engine: Engine, canvas: HTMLCanvasElement, loa
   turnOrderStack.paddingTop = "10px";
   turnOrderScroll.addControl(turnOrderStack);
 
+  function getUnitDisplayText(unit: Unit): string {
+    const designation = UNIT_DESIGNATIONS[unit.loadoutIndex] || "?";
+    const className = getClassData(unit.unitClass).name;
+    const isMelee = unit.customization?.combatStyle === "melee";
+    const weapon = isMelee ? "Melee" : "Ranged";
+    const boostData = BOOST_INFO[unit.boost] || BOOST_INFO[0];
+    return `${designation} ${className} (${weapon}, ${boostData.name})`;
+  }
+
+  function getUnitTeamColor(unit: Unit): string {
+    const r = Math.round(unit.teamColor.r * 255).toString(16).padStart(2, '0');
+    const g = Math.round(unit.teamColor.g * 255).toString(16).padStart(2, '0');
+    const b = Math.round(unit.teamColor.b * 255).toString(16).padStart(2, '0');
+    return `#${r}${g}${b}`;
+  }
+
   function updateNextUpIndicator(): void {
-    const predicted = predictTurnOrder(2); // Get at least 2 to skip current if needed
-
-    // Find the next unit that isn't the current one
-    const next = predicted.find(u => u !== currentUnit);
-
-    // Build display text
-    let displayText = "--";
-    let displayColor = "#888888";
-    let borderColor = "#555555";
-
-    if (next) {
-      const designation = UNIT_DESIGNATIONS[next.loadoutIndex] || "?";
-      const className = getClassData(next.unitClass).name;
-      displayText = `${designation} ${className}`;
-
-      // Color by team
-      const r = Math.round(next.teamColor.r * 255).toString(16).padStart(2, '0');
-      const g = Math.round(next.teamColor.g * 255).toString(16).padStart(2, '0');
-      const b = Math.round(next.teamColor.b * 255).toString(16).padStart(2, '0');
-      displayColor = `#${r}${g}${b}`;
-      borderColor = displayColor;
+    // Update NOW line with current unit
+    if (currentUnit) {
+      nowUnitText.text = getUnitDisplayText(currentUnit);
+      nowUnitText.color = getUnitTeamColor(currentUnit);
+    } else {
+      nowUnitText.text = "--";
+      nowUnitText.color = "#888888";
     }
 
-    nextUpText.text = `Next Up: ${displayText}`;
-    nextUpText.color = displayColor;
-    nextUpBtn.color = borderColor;
+    // Update Next Up line
+    const predicted = predictTurnOrder(2);
+    const next = predicted.find(u => u !== currentUnit);
+
+    if (next) {
+      nextUpText.text = getUnitDisplayText(next);
+      nextUpText.color = getUnitTeamColor(next);
+    } else {
+      nextUpText.text = "--";
+      nextUpText.color = "#888888";
+    }
   }
 
   function showTurnOrderModal(): void {
@@ -3962,7 +4021,7 @@ export function createBattleScene(engine: Engine, canvas: HTMLCanvasElement, loa
   }
 
   // Event handlers
-  nextUpBtn.onPointerClickObservable.add(() => {
+  turnIndicatorBtn.onPointerClickObservable.add(() => {
     showTurnOrderModal();
   });
 
@@ -3976,13 +4035,13 @@ export function createBattleScene(engine: Engine, canvas: HTMLCanvasElement, loa
   // ============================================
 
   // Cancel button - bottom left
-  const cancelBtn = Button.CreateSimpleButton("cancelBtn", "Cancel");
-  cancelBtn.width = "100px";
-  cancelBtn.height = "44px";
+  const cancelBtn = Button.CreateSimpleButton("cancelBtn", "✕");
+  cancelBtn.width = "50px";
+  cancelBtn.height = "50px";
   cancelBtn.background = "#3a2020";
   cancelBtn.color = "#ff6666";
-  cancelBtn.cornerRadius = 8;
-  cancelBtn.fontSize = 16;
+  cancelBtn.cornerRadius = 25;
+  cancelBtn.fontSize = 24;
   cancelBtn.fontWeight = "bold";
   cancelBtn.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_LEFT;
   cancelBtn.verticalAlignment = Control.VERTICAL_ALIGNMENT_BOTTOM;
@@ -4018,13 +4077,13 @@ export function createBattleScene(engine: Engine, canvas: HTMLCanvasElement, loa
   });
 
   // Execute button - bottom right
-  const executeBtn = Button.CreateSimpleButton("executeBtn", "Execute");
-  executeBtn.width = "100px";
-  executeBtn.height = "44px";
+  const executeBtn = Button.CreateSimpleButton("executeBtn", "✓");
+  executeBtn.width = "50px";
+  executeBtn.height = "50px";
   executeBtn.background = "#203a20";
   executeBtn.color = "#66ff66";
-  executeBtn.cornerRadius = 8;
-  executeBtn.fontSize = 16;
+  executeBtn.cornerRadius = 25;
+  executeBtn.fontSize = 24;
   executeBtn.fontWeight = "bold";
   executeBtn.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_RIGHT;
   executeBtn.verticalAlignment = Control.VERTICAL_ALIGNMENT_BOTTOM;
@@ -4034,36 +4093,282 @@ export function createBattleScene(engine: Engine, canvas: HTMLCanvasElement, loa
   executeBtn.isVisible = false;
   gui.addControl(executeBtn);
 
-  // Pulse animation state for execute button
+  // Pulse animation state for execute button (only when all actions used - green state)
   let executePulseTime = 0;
 
   scene.onBeforeRenderObservable.add(() => {
-    if (executeBtn.isVisible && turnState && turnState.pendingActions.length >= 2) {
+    const allActionsUsed = turnState && turnState.actionsRemaining === 0;
+    const shouldPulse = executeBtn.isVisible && allActionsUsed;
+
+    if (shouldPulse) {
       executePulseTime += engine.getDeltaTime() / 1000;
       const pulse = 0.6 + 0.4 * Math.sin(executePulseTime * 4);
       executeBtn.background = `rgba(32, 80, 32, ${pulse})`;
       executeBtn.color = `rgba(102, 255, 102, ${0.7 + 0.3 * pulse})`;
     } else {
       executePulseTime = 0;
-      executeBtn.background = "#203a20";
-      executeBtn.color = "#66ff66";
+      // Don't override colors here - updateActionButtons handles that
     }
+  });
+
+  // Skip confirmation popup
+  const skipConfirmBackdrop = new Rectangle("skipConfirmBackdrop");
+  skipConfirmBackdrop.width = "100%";
+  skipConfirmBackdrop.height = "100%";
+  skipConfirmBackdrop.background = "rgba(0, 0, 0, 0.5)";
+  skipConfirmBackdrop.thickness = 0;
+  skipConfirmBackdrop.isVisible = false;
+  skipConfirmBackdrop.zIndex = 100;
+  gui.addControl(skipConfirmBackdrop);
+
+  const skipConfirmPanel = new Rectangle("skipConfirmPanel");
+  skipConfirmPanel.width = "280px";
+  skipConfirmPanel.height = "120px";
+  skipConfirmPanel.background = "#1a1a2a";
+  skipConfirmPanel.cornerRadius = 12;
+  skipConfirmPanel.thickness = 2;
+  skipConfirmPanel.color = "#ffff66";
+  skipConfirmPanel.zIndex = 101;
+  gui.addControl(skipConfirmPanel);
+  skipConfirmPanel.isVisible = false;
+
+  const skipConfirmStack = new StackPanel("skipConfirmStack");
+  skipConfirmStack.isVertical = true;
+  skipConfirmPanel.addControl(skipConfirmStack);
+
+  const skipConfirmText = new TextBlock("skipConfirmText");
+  skipConfirmText.text = "Skip action for Speed Boost?";
+  skipConfirmText.fontSize = 14;
+  skipConfirmText.color = "white";
+  skipConfirmText.height = "50px";
+  skipConfirmText.textWrapping = true;
+  skipConfirmStack.addControl(skipConfirmText);
+
+  const skipConfirmBtnRow = new StackPanel("skipConfirmBtnRow");
+  skipConfirmBtnRow.isVertical = false;
+  skipConfirmBtnRow.height = "50px";
+  skipConfirmStack.addControl(skipConfirmBtnRow);
+
+  const skipConfirmNo = Button.CreateSimpleButton("skipConfirmNo", "Cancel");
+  skipConfirmNo.width = "100px";
+  skipConfirmNo.height = "36px";
+  skipConfirmNo.background = "#2a2a2a";
+  skipConfirmNo.color = "#aaaaaa";
+  skipConfirmNo.cornerRadius = 8;
+  skipConfirmNo.fontSize = 14;
+  skipConfirmNo.paddingRight = "10px";
+  skipConfirmBtnRow.addControl(skipConfirmNo);
+
+  const skipConfirmYes = Button.CreateSimpleButton("skipConfirmYes", "Yes, Skip");
+  skipConfirmYes.width = "100px";
+  skipConfirmYes.height = "36px";
+  skipConfirmYes.background = "#3a3a20";
+  skipConfirmYes.color = "#ffff66";
+  skipConfirmYes.cornerRadius = 8;
+  skipConfirmYes.fontSize = 14;
+  skipConfirmYes.paddingLeft = "10px";
+  skipConfirmBtnRow.addControl(skipConfirmYes);
+
+  function showSkipConfirm(): void {
+    if (!turnState) return;
+    const unusedActions = turnState.actionsRemaining;
+    const speedBoost = unusedActions * SPEED_BONUS_PER_UNUSED_ACTION;
+    const actionWord = unusedActions === 1 ? "action" : "actions";
+    skipConfirmText.text = `Skip ${unusedActions} ${actionWord} for Speed Boost?\n(+${speedBoost.toFixed(2)})`;
+    skipConfirmBackdrop.isVisible = true;
+    skipConfirmPanel.isVisible = true;
+  }
+
+  function hideSkipConfirm(): void {
+    skipConfirmBackdrop.isVisible = false;
+    skipConfirmPanel.isVisible = false;
+  }
+
+  skipConfirmYes.onPointerClickObservable.add(() => {
+    hideSkipConfirm();
+    executeQueuedActions();
+  });
+
+  skipConfirmNo.onPointerClickObservable.add(() => {
+    hideSkipConfirm();
+  });
+
+  skipConfirmBackdrop.onPointerClickObservable.add(() => {
+    hideSkipConfirm();
   });
 
   executeBtn.onPointerClickObservable.add(() => {
     if (!currentUnit || !turnState) return;
 
-    // Execute all queued actions
-    executeQueuedActions();
+    // If there are unused actions, show confirmation popup
+    if (turnState.actionsRemaining > 0) {
+      showSkipConfirm();
+    } else {
+      // All actions used, just execute
+      executeQueuedActions();
+    }
   });
 
-  // Update action button visibility
+  // Update action button visibility and style
   function updateActionButtons(): void {
     const hasQueuedActions = !!(turnState && turnState.pendingActions.length > 0);
     const isHumanTurn = !!(currentUnit && !controllerManager.isAI(currentUnit.team));
+    const allActionsUsed = turnState && turnState.actionsRemaining === 0;
 
     cancelBtn.isVisible = isHumanTurn && hasQueuedActions;
-    executeBtn.isVisible = isHumanTurn && hasQueuedActions;
+    executeBtn.isVisible = isHumanTurn; // Always show during human turn
+    queuedActionsPanel.isVisible = isHumanTurn && hasQueuedActions;
+
+    // Update execute button appearance:
+    // - Green checkmark when all actions are used (ready to execute)
+    // - Yellow skip when actions remain (will show confirmation)
+    if (executeBtn.textBlock) {
+      if (allActionsUsed) {
+        // Green checkmark - all actions used, ready to execute
+        executeBtn.textBlock.text = "✓";
+        executeBtn.background = "#203a20";
+        executeBtn.color = "#66ff66";
+      } else {
+        // Yellow skip - has unused actions
+        executeBtn.textBlock.text = "⏭";
+        executeBtn.background = "#3a3a20";
+        executeBtn.color = "#ffff66";
+      }
+    }
+
+    updateQueuedActionsDisplay();
+  }
+
+  // ============================================
+  // ACTION COUNTER (Below HP Bar)
+  // ============================================
+
+  const actionCounterText = new TextBlock("actionCounterText");
+  actionCounterText.text = "2/2";
+  actionCounterText.fontSize = 14;
+  actionCounterText.fontWeight = "bold";
+  actionCounterText.color = "#66ff66";
+  actionCounterText.outlineWidth = 2;
+  actionCounterText.outlineColor = "black";
+  actionCounterText.isVisible = false;
+  gui.addControl(actionCounterText);
+
+  function updateActionCounter(): void {
+    if (!currentUnit || !turnState || controllerManager.isAI(currentUnit.team)) {
+      actionCounterText.isVisible = false;
+      return;
+    }
+
+    const remaining = turnState.actionsRemaining;
+    actionCounterText.text = `${remaining}/${ACTIONS_PER_TURN}`;
+
+    // Color based on remaining actions
+    if (remaining >= 2) {
+      actionCounterText.color = "#66ff66"; // Green
+    } else if (remaining === 1) {
+      actionCounterText.color = "#ffff66"; // Yellow
+    } else {
+      actionCounterText.color = "#ff6666"; // Red
+    }
+
+    // Position below HP bar (which is at HP_BAR_ANCHOR_HEIGHT with linkOffsetY=-50)
+    const effectiveX = shadowPosition?.x ?? currentUnit.gridX;
+    const effectiveZ = shadowPosition?.z ?? currentUnit.gridZ;
+    const gridOffset = (GRID_SIZE * TILE_SIZE) / 2 - TILE_SIZE / 2;
+
+    // Convert world position to screen coordinates - position just below HP bar
+    const worldPos = new Vector3(
+      effectiveX * TILE_SIZE - gridOffset,
+      HP_BAR_ANCHOR_HEIGHT,
+      effectiveZ * TILE_SIZE - gridOffset
+    );
+    const screenPos = Vector3.Project(
+      worldPos,
+      Matrix.Identity(),
+      scene.getTransformMatrix(),
+      camera.viewport.toGlobal(engine.getRenderWidth(), engine.getRenderHeight())
+    );
+
+    // Convert to GUI coordinates (centered), position just below HP bar
+    // HP bar is at -50 offset, so -35 puts us below it
+    actionCounterText.left = `${screenPos.x - engine.getRenderWidth() / 2}px`;
+    actionCounterText.top = `${screenPos.y - engine.getRenderHeight() / 2 - 35}px`;
+    actionCounterText.isVisible = true;
+  }
+
+  // Update action counter position each frame
+  scene.onBeforeRenderObservable.add(() => {
+    updateActionCounter();
+  });
+
+  // ============================================
+  // QUEUED ACTIONS DISPLAY (Bottom Center)
+  // ============================================
+
+  const queuedActionsPanel = new Rectangle("queuedActionsPanel");
+  queuedActionsPanel.height = "50px";
+  queuedActionsPanel.adaptHeightToChildren = true;
+  queuedActionsPanel.background = "rgba(20, 20, 30, 0.8)";
+  queuedActionsPanel.cornerRadius = 8;
+  queuedActionsPanel.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_CENTER;
+  queuedActionsPanel.verticalAlignment = Control.VERTICAL_ALIGNMENT_BOTTOM;
+  queuedActionsPanel.top = "-15px";
+  queuedActionsPanel.thickness = 0;
+  queuedActionsPanel.adaptWidthToChildren = true;
+  queuedActionsPanel.paddingLeft = "15px";
+  queuedActionsPanel.paddingRight = "15px";
+  queuedActionsPanel.isVisible = false;
+
+  const queuedActionsStack = new StackPanel("queuedActionsStack");
+  queuedActionsStack.isVertical = true;
+  queuedActionsStack.verticalAlignment = Control.VERTICAL_ALIGNMENT_CENTER;
+  queuedActionsPanel.addControl(queuedActionsStack);
+
+  gui.addControl(queuedActionsPanel);
+
+  function updateQueuedActionsDisplay(): void {
+    queuedActionsStack.clearControls();
+
+    if (!currentUnit || !turnState || turnState.pendingActions.length === 0) {
+      return;
+    }
+
+    for (const action of turnState.pendingActions) {
+      const actionLine = new TextBlock();
+      actionLine.fontSize = 12;
+      actionLine.height = "18px";
+      actionLine.resizeToFit = true;
+
+      if (action.type === "move") {
+        actionLine.text = `Move to (${action.targetX}, ${action.targetZ})`;
+        actionLine.color = "#88ccff"; // Blue for move
+      } else if (action.type === "attack" && action.targetUnit) {
+        const target = action.targetUnit;
+        const targetDesignation = UNIT_DESIGNATIONS[target.loadoutIndex] || "?";
+        const targetClass = getClassData(target.unitClass).name;
+        const damage = currentUnit.attack;
+        const newHp = Math.max(0, target.hp - damage);
+        actionLine.text = `${targetDesignation} ${targetClass} HP ${target.hp} → ${newHp}`;
+        actionLine.color = "#ff6666"; // Red for attack
+      } else if (action.type === "ability" && action.abilityName === "heal" && action.targetUnit) {
+        const target = action.targetUnit;
+        const targetDesignation = UNIT_DESIGNATIONS[target.loadoutIndex] || "?";
+        const targetClass = getClassData(target.unitClass).name;
+        const healAmt = currentUnit.healAmount;
+        const newHp = Math.min(target.maxHp, target.hp + healAmt);
+        const name = target === currentUnit ? "Self" : `${targetDesignation} ${targetClass}`;
+        actionLine.text = `${name} HP ${target.hp} → ${newHp}`;
+        actionLine.color = "#66ff66"; // Green for heal
+      } else if (action.type === "ability" && action.abilityName === "conceal") {
+        actionLine.text = "Conceal";
+        actionLine.color = "#ffff66"; // Yellow for ability
+      } else if (action.type === "ability" && action.abilityName === "cover") {
+        actionLine.text = "Cover";
+        actionLine.color = "#ffff66"; // Yellow for ability
+      }
+
+      queuedActionsStack.addControl(actionLine);
+    }
   }
 
   // ============================================
