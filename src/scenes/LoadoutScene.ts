@@ -11,6 +11,7 @@ import {
   StandardMaterial,
   AnimationGroup,
   PointerEventTypes,
+  RenderTargetTexture,
 } from "@babylonjs/core";
 import "@babylonjs/loaders/glTF";
 import {
@@ -22,6 +23,7 @@ import {
   Grid,
   Control,
   ScrollViewer,
+  Image,
 } from "@babylonjs/gui";
 import { ALL_CLASSES, getClassData, Loadout, UnitSelection, UnitClass, UnitCustomization } from "../types";
 import { getGameMode } from "../main";
@@ -746,8 +748,9 @@ export function createLoadoutScene(
 
     const unitClass = editingUnit.selectionArray[editingUnit.unitIndex]?.unitClass || "soldier";
     const classData = getClassData(unitClass);
-    // Construct model path from modelFile base name and body type
-    const modelPath = `/models/${classData.modelFile}_${editingCustomization.body}.glb`;
+    // Construct model path from modelFile base name and body type (m/f suffix)
+    const gender = editingCustomization.body === "male" ? "m" : "f";
+    const modelPath = `/models/${classData.modelFile}_${gender}.glb`;
 
     SceneLoader.ImportMeshAsync("", modelPath, "", scene).then((result) => {
       previewMesh = result.meshes[0];
@@ -1259,7 +1262,7 @@ export function createLoadoutScene(
       copyStack.addControl(copyWeaponText);
     }
 
-    // === COLUMN 3: Preview (Desktop only) ===
+    // === COLUMN 3: Preview (Desktop only) - RTT based ===
     let unitPreviewMesh: AbstractMesh | null = null;
     let unitPreviewAnims: AnimationGroup[] = [];
     let loadUnitPreview: (() => void) | null = null;
@@ -1269,18 +1272,88 @@ export function createLoadoutScene(
       previewContainer.width = "100%";
       previewContainer.height = "100%";
       previewContainer.thickness = 0;
-      previewContainer.background = "transparent";
+      previewContainer.background = COLORS.bgButton;
       previewContainer.cornerRadius = 6;
       mainGrid.addControl(previewContainer, 0, 3);
 
-      // Position offset for each unit (stack them horizontally in world space)
-      const previewXOffset = (unitIndex - 1) * 2.5; // -2.5, 0, 2.5 for units 0, 1, 2
-      const previewYOffset = 0;
+      // RTT setup for this unit's preview
+      const rttSize = 256;
+      const rtt = new RenderTargetTexture(`rtt_${playerId}_${unitIndex}`, rttSize, scene, false);
+      rtt.clearColor = new Color4(0.1, 0.08, 0.06, 1); // Dark warm background
+      scene.customRenderTargets.push(rtt);
+
+      // Preview camera for this unit
+      const previewCamera = new ArcRotateCamera(
+        `previewCam_${playerId}_${unitIndex}`,
+        Math.PI / 2 + 0.3, // Slight angle
+        Math.PI / 2.5,
+        2.5,
+        new Vector3(0, 0.9, 0),
+        scene
+      );
+      rtt.activeCamera = previewCamera;
+
+      // Force square aspect ratio for the RTT camera (ignores main canvas aspect)
+      const originalGetEngine = previewCamera.getEngine.bind(previewCamera);
+      previewCamera.getEngine = () => {
+        const eng = originalGetEngine();
+        return {
+          ...eng,
+          getAspectRatio: () => 1,
+        } as any;
+      };
+
+      // Layer mask so this model only renders to its own RTT
+      const layerMask = 0x10000000 << (playerId === "player1" ? unitIndex : unitIndex + 3);
+      previewCamera.layerMask = layerMask;
+
+      // Canvas to read RTT pixels
+      const canvas = document.createElement("canvas");
+      canvas.width = rttSize;
+      canvas.height = rttSize;
+      const ctx = canvas.getContext("2d")!;
+
+      // GUI Image to display the preview
+      const previewImage = new Image(`previewImg_${playerId}_${unitIndex}`, "");
+      previewImage.stretch = Image.STRETCH_UNIFORM;
+      previewImage.width = "100%";
+      previewImage.height = "100%";
+      previewContainer.addControl(previewImage);
+
+      // Update canvas from RTT (throttled)
+      let frameCount = 0;
+      rtt.onAfterRenderObservable.add(() => {
+        frameCount++;
+        if (frameCount % 3 !== 0) return;
+
+        rtt.readPixels()?.then((buffer) => {
+          if (!buffer) return;
+          const pixels = new Uint8Array(buffer.buffer);
+          const imageData = ctx.createImageData(rttSize, rttSize);
+
+          for (let y = 0; y < rttSize; y++) {
+            for (let x = 0; x < rttSize; x++) {
+              const srcIdx = ((rttSize - 1 - y) * rttSize + x) * 4;
+              const dstIdx = (y * rttSize + x) * 4;
+              imageData.data[dstIdx] = pixels[srcIdx];
+              imageData.data[dstIdx + 1] = pixels[srcIdx + 1];
+              imageData.data[dstIdx + 2] = pixels[srcIdx + 2];
+              imageData.data[dstIdx + 3] = pixels[srcIdx + 3];
+            }
+          }
+          ctx.putImageData(imageData, 0, 0);
+          previewImage.source = canvas.toDataURL();
+        });
+      });
 
       // Load preview model
       loadUnitPreview = (): void => {
         // Clean up existing
         if (unitPreviewMesh) {
+          // Remove from RTT render list
+          if (rtt.renderList) {
+            rtt.renderList.length = 0;
+          }
           unitPreviewMesh.dispose();
           unitPreviewMesh = null;
         }
@@ -1289,13 +1362,20 @@ export function createLoadoutScene(
 
         const classData = getClassData(selectedClass);
         const body = selectionArray[unitIndex]?.customization?.body || "male";
-        const modelPath = `/models/${classData.modelFile}_${body}.glb`;
+        const gender = body === "male" ? "m" : "f";
+        const modelPath = `/models/${classData.modelFile}_${gender}.glb`;
 
         SceneLoader.ImportMeshAsync("", modelPath, "", scene).then((result) => {
           unitPreviewMesh = result.meshes[0];
-          unitPreviewMesh.position = new Vector3(previewXOffset, previewYOffset, 0);
-          unitPreviewMesh.scaling = new Vector3(0.8, 0.8, 0.8);
-          unitPreviewMesh.rotation = new Vector3(0, Math.PI * 0.1, 0);
+          unitPreviewMesh.position = new Vector3(0, 0, 0);
+          unitPreviewMesh.scaling = new Vector3(0.9, 0.9, 0.9);
+          unitPreviewMesh.rotation = new Vector3(0, Math.PI * 0.15, 0);
+
+          // Set layer mask and add to RTT render list
+          result.meshes.forEach(m => {
+            m.layerMask = layerMask;
+            rtt.renderList?.push(m);
+          });
 
           // Play idle animation
           unitPreviewAnims = result.animationGroups;
