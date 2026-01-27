@@ -154,8 +154,10 @@ export function createLoadoutScene(
   // RESPONSIVE SIZING
   // ============================================
   const screenWidth = engine.getRenderWidth();
-  const isMobile = screenWidth < 600;
-  const isTablet = screenWidth >= 600 && screenWidth < 1024;
+  const screenHeight = engine.getRenderHeight();
+  const isLandscapePhone = screenHeight < 500 && screenWidth < 1024;
+  const isMobile = screenWidth < 600 && !isLandscapePhone;
+  const isTablet = (screenWidth >= 600 && screenWidth < 1024) || isLandscapePhone;
 
   // Touch-friendly button heights (44px minimum for mobile)
   const buttonHeight = isMobile ? 44 : isTablet ? 46 : 48;
@@ -580,36 +582,37 @@ export function createLoadoutScene(
     const container = new StackPanel(`appearance_${label}`);
     container.width = "100%";
     container.isVertical = true;
-    container.paddingTop = "12px";
-    container.paddingBottom = "12px";
+    container.paddingTop = isMobile ? "6px" : "12px";
+    container.paddingBottom = isMobile ? "6px" : "12px";
     container.paddingLeft = isMobile ? "15px" : "25px";
     container.paddingRight = isMobile ? "15px" : "25px";
 
     const labelText = new TextBlock();
     labelText.text = label.toUpperCase();
     labelText.color = COLORS.textMuted;
-    labelText.fontSize = smallFontSize;
-    labelText.height = "24px";
+    labelText.fontSize = isMobile ? 10 : smallFontSize;
+    labelText.height = isMobile ? "18px" : "24px";
     labelText.textHorizontalAlignment = Control.HORIZONTAL_ALIGNMENT_LEFT;
     container.addControl(labelText);
 
+    const editorBtnHeight = isMobile ? 32 : smallButtonHeight;
     const btnRow = new StackPanel();
     btnRow.isVertical = false;
     btnRow.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_LEFT;
-    btnRow.height = `${smallButtonHeight + 4}px`;
+    btnRow.height = `${editorBtnHeight + 4}px`;
     container.addControl(btnRow);
 
     const buttons: Button[] = [];
     options.forEach((opt, i) => {
       const btn = Button.CreateSimpleButton(`${label}_${i}`, opt);
-      btn.width = `${Math.max(60, opt.length * 12 + 20)}px`;
-      btn.height = `${smallButtonHeight}px`;
+      btn.width = `${Math.max(isMobile ? 50 : 60, opt.length * (isMobile ? 10 : 12) + 16)}px`;
+      btn.height = `${editorBtnHeight}px`;
       btn.color = COLORS.textPrimary;
       btn.background = i === defaultIdx ? COLORS.selected : COLORS.bgButton;
       btn.cornerRadius = 4;
-      btn.fontSize = smallFontSize;
-      btn.paddingLeft = "4px";
-      btn.paddingRight = "4px";
+      btn.fontSize = isMobile ? 10 : smallFontSize;
+      btn.paddingLeft = "3px";
+      btn.paddingRight = "3px";
       btn.thickness = 1;
 
       btn.onPointerEnterObservable.add(() => {
@@ -647,27 +650,27 @@ export function createLoadoutScene(
     const container = new StackPanel(`appearance_${label}`);
     container.width = "100%";
     container.isVertical = true;
-    container.paddingTop = "12px";
-    container.paddingBottom = "12px";
+    container.paddingTop = isMobile ? "6px" : "12px";
+    container.paddingBottom = isMobile ? "6px" : "12px";
     container.paddingLeft = isMobile ? "15px" : "25px";
     container.paddingRight = isMobile ? "15px" : "25px";
 
     const labelText = new TextBlock();
     labelText.text = label.toUpperCase();
     labelText.color = COLORS.textMuted;
-    labelText.fontSize = smallFontSize;
-    labelText.height = "24px";
+    labelText.fontSize = isMobile ? 10 : smallFontSize;
+    labelText.height = isMobile ? "18px" : "24px";
     labelText.textHorizontalAlignment = Control.HORIZONTAL_ALIGNMENT_LEFT;
     container.addControl(labelText);
 
     const swatchRow = new StackPanel();
     swatchRow.isVertical = false;
     swatchRow.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_LEFT;
-    swatchRow.height = `${smallButtonHeight}px`;
+    const swatchSize = isMobile ? 26 : 28;
+    swatchRow.height = `${swatchSize + 4}px`;
     container.addControl(swatchRow);
 
     const swatches: Rectangle[] = [];
-    const swatchSize = isMobile ? 32 : 28;
 
     colors.forEach((color, i) => {
       const swatch = new Rectangle();
@@ -821,29 +824,35 @@ export function createLoadoutScene(
   appearanceOverlay.zIndex = 500;
   gui.addControl(appearanceOverlay);
 
-  // Layout: options on left, preview on right (50/50 with padding)
+  // Layout structure differs by device:
+  // Mobile portrait: Sticky preview at top (35%), scrollable options below (65%)
+  // Tablet/Desktop: Side-by-side with options left, preview right (cropped to show center)
   const overlayGrid = new Grid("overlayGrid");
   overlayGrid.width = "100%";
   overlayGrid.height = "100%";
 
   if (isMobile) {
+    // Mobile portrait: preview on top (sticky), options scroll below
     overlayGrid.addColumnDefinition(1);
-    overlayGrid.addRowDefinition(0.45); // Preview
-    overlayGrid.addRowDefinition(0.55); // Options
+    overlayGrid.addRowDefinition(0.35); // Preview - sticky
+    overlayGrid.addRowDefinition(0.65); // Options - scrollable
   } else {
+    // Tablet/Desktop: side by side
     overlayGrid.addColumnDefinition(0.5); // Options
     overlayGrid.addColumnDefinition(0.5); // Preview
     overlayGrid.addRowDefinition(1);
   }
   appearanceOverlay.addControl(overlayGrid);
 
-  // Options panel with drag-to-scroll
+  // Options panel with scroll - use native ScrollViewer scrolling
   const optionsPanel = new ScrollViewer("optionsScroll");
   optionsPanel.width = "100%";
   optionsPanel.height = "100%";
   optionsPanel.thickness = 0;
-  optionsPanel.barSize = 0; // Hide scrollbar for cleaner look
-  optionsPanel.barColor = "transparent";
+  optionsPanel.barSize = 8;
+  optionsPanel.barColor = COLORS.borderWarm;
+  optionsPanel.barBackground = "transparent";
+  optionsPanel.wheelPrecision = 100; // More responsive wheel scrolling
   if (isMobile) {
     overlayGrid.addControl(optionsPanel, 1, 0);
   } else {
@@ -851,30 +860,50 @@ export function createLoadoutScene(
   }
 
   const optionsStack = new StackPanel("optionsStack");
-  optionsStack.width = isMobile ? "90%" : "85%";
+  optionsStack.width = "100%";
   optionsStack.isVertical = true;
-  optionsStack.paddingTop = isMobile ? "15px" : "40px";
-  optionsStack.paddingBottom = "30px";
+  optionsStack.paddingTop = isMobile ? "10px" : "30px";
+  optionsStack.paddingBottom = "40px";
   optionsPanel.addControl(optionsStack);
 
-  // Drag-to-scroll for options panel
+  // Touch-based drag-to-scroll using window events (more reliable on mobile)
   let editorDragging = false;
-  let editorLastPointerY = 0;
+  let editorLastTouchY = 0;
+  let editorTouchStartedInOptions = false;
 
-  appearanceOverlay.onPointerDownObservable.add((info) => {
-    editorDragging = true;
-    editorLastPointerY = info.y;
-  });
+  const editorTouchStart = (e: TouchEvent) => {
+    if (!appearanceOverlay.isVisible) return;
 
-  appearanceOverlay.onPointerUpObservable.add(() => {
-    editorDragging = false;
-  });
+    // Check if touch started in the options area (bottom 65% on mobile, left 50% on tablet/desktop)
+    const touch = e.touches[0];
+    const rect = engine.getRenderingCanvas()?.getBoundingClientRect();
+    if (!rect) return;
 
-  appearanceOverlay.onPointerMoveObservable.add((info) => {
-    if (!editorDragging) return;
+    const touchX = touch.clientX - rect.left;
+    const touchY = touch.clientY - rect.top;
+    const canvasHeight = rect.height;
+    const canvasWidth = rect.width;
 
-    const deltaY = editorLastPointerY - info.y;
-    editorLastPointerY = info.y;
+    if (isMobile) {
+      // On mobile, options are in bottom 65%
+      editorTouchStartedInOptions = touchY > canvasHeight * 0.35;
+    } else {
+      // On tablet/desktop, options are on left 50%
+      editorTouchStartedInOptions = touchX < canvasWidth * 0.5;
+    }
+
+    if (editorTouchStartedInOptions) {
+      editorDragging = true;
+      editorLastTouchY = touch.clientY;
+    }
+  };
+
+  const editorTouchMove = (e: TouchEvent) => {
+    if (!editorDragging || !appearanceOverlay.isVisible) return;
+
+    const touch = e.touches[0];
+    const deltaY = editorLastTouchY - touch.clientY;
+    editorLastTouchY = touch.clientY;
 
     const contentHeight = optionsStack.heightInPixels;
     const viewportHeight = optionsPanel.heightInPixels;
@@ -885,12 +914,31 @@ export function createLoadoutScene(
       const newScroll = Math.max(0, Math.min(1, optionsPanel.verticalBar.value + scrollDelta));
       optionsPanel.verticalBar.value = newScroll;
     }
+
+    // Prevent page scroll
+    e.preventDefault();
+  };
+
+  const editorTouchEnd = () => {
+    editorDragging = false;
+    editorTouchStartedInOptions = false;
+  };
+
+  window.addEventListener("touchstart", editorTouchStart, { passive: false });
+  window.addEventListener("touchmove", editorTouchMove, { passive: false });
+  window.addEventListener("touchend", editorTouchEnd);
+
+  // Clean up touch listeners when scene is disposed
+  scene.onDisposeObservable.add(() => {
+    window.removeEventListener("touchstart", editorTouchStart);
+    window.removeEventListener("touchmove", editorTouchMove);
+    window.removeEventListener("touchend", editorTouchEnd);
   });
 
   // Title
   const titleContainer = new Rectangle("titleContainer");
   titleContainer.width = "100%";
-  titleContainer.height = "50px";
+  titleContainer.height = isMobile ? "40px" : "50px";
   titleContainer.thickness = 0;
   titleContainer.paddingLeft = isMobile ? "15px" : "25px";
   titleContainer.paddingRight = isMobile ? "15px" : "25px";
@@ -899,7 +947,7 @@ export function createLoadoutScene(
   const overlayTitle = new TextBlock("overlayTitle");
   overlayTitle.text = "EDIT APPEARANCE";
   overlayTitle.color = COLORS.textPrimary;
-  overlayTitle.fontSize = headerFontSize;
+  overlayTitle.fontSize = isMobile ? 18 : headerFontSize;
   overlayTitle.fontFamily = "'Bebas Neue', sans-serif";
   overlayTitle.textHorizontalAlignment = Control.HORIZONTAL_ALIGNMENT_LEFT;
   overlayTitle.textVerticalAlignment = Control.VERTICAL_ALIGNMENT_CENTER;
@@ -939,20 +987,20 @@ export function createLoadoutScene(
   // Button row
   const editorButtonRow = new StackPanel("editorButtonRow");
   editorButtonRow.isVertical = false;
-  editorButtonRow.height = `${buttonHeight + 30}px`;
-  editorButtonRow.paddingTop = "20px";
+  editorButtonRow.height = `${buttonHeight + 20}px`;
+  editorButtonRow.paddingTop = "15px";
   editorButtonRow.paddingLeft = isMobile ? "15px" : "25px";
   editorButtonRow.paddingRight = isMobile ? "15px" : "25px";
   editorButtonRow.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_LEFT;
   optionsStack.addControl(editorButtonRow);
 
   const saveBtn = Button.CreateSimpleButton("saveAppearance", "S A V E");
-  saveBtn.width = isMobile ? "120px" : "140px";
-  saveBtn.height = `${buttonHeight}px`;
+  saveBtn.width = isMobile ? "100px" : "140px";
+  saveBtn.height = `${isMobile ? 38 : buttonHeight}px`;
   saveBtn.color = COLORS.textPrimary;
   saveBtn.background = COLORS.success;
   saveBtn.cornerRadius = 4;
-  saveBtn.fontSize = fontSize;
+  saveBtn.fontSize = isMobile ? 12 : fontSize;
   saveBtn.fontFamily = "'Bebas Neue', sans-serif";
   saveBtn.onPointerEnterObservable.add(() => { saveBtn.background = COLORS.successHover; });
   saveBtn.onPointerOutObservable.add(() => { saveBtn.background = COLORS.success; });
@@ -969,18 +1017,18 @@ export function createLoadoutScene(
 
   // Spacer
   const editorBtnSpacer = new Rectangle();
-  editorBtnSpacer.width = "15px";
+  editorBtnSpacer.width = "10px";
   editorBtnSpacer.height = "1px";
   editorBtnSpacer.thickness = 0;
   editorButtonRow.addControl(editorBtnSpacer);
 
   const cancelBtn = Button.CreateSimpleButton("cancelAppearance", "C A N C E L");
-  cancelBtn.width = isMobile ? "100px" : "120px";
-  cancelBtn.height = `${buttonHeight}px`;
+  cancelBtn.width = isMobile ? "90px" : "120px";
+  cancelBtn.height = `${isMobile ? 38 : buttonHeight}px`;
   cancelBtn.color = COLORS.textSecondary;
   cancelBtn.background = COLORS.bgButton;
   cancelBtn.cornerRadius = 4;
-  cancelBtn.fontSize = fontSize;
+  cancelBtn.fontSize = isMobile ? 12 : fontSize;
   cancelBtn.fontFamily = "'Bebas Neue', sans-serif";
   cancelBtn.onPointerEnterObservable.add(() => { cancelBtn.background = COLORS.bgButtonHover; });
   cancelBtn.onPointerOutObservable.add(() => { cancelBtn.background = COLORS.bgButton; });
@@ -989,26 +1037,53 @@ export function createLoadoutScene(
   });
   editorButtonRow.addControl(cancelBtn);
 
-  // Preview area (right side on desktop, top on mobile)
+  // Preview area (right side on tablet/desktop, top on mobile)
+  // Make preview completely non-interactive so it doesn't interfere with scrolling
   const previewArea = new Rectangle("previewArea");
   previewArea.width = "100%";
   previewArea.height = "100%";
   previewArea.thickness = 0;
   previewArea.background = COLORS.bgPreview;
-  previewArea.paddingTop = isMobile ? "10px" : "40px";
-  previewArea.paddingBottom = isMobile ? "10px" : "40px";
-  previewArea.paddingLeft = isMobile ? "20px" : "20px";
-  previewArea.paddingRight = isMobile ? "20px" : "40px";
+  previewArea.isHitTestVisible = false; // Don't capture any pointer events
   if (isMobile) {
     overlayGrid.addControl(previewArea, 0, 0);
   } else {
     overlayGrid.addControl(previewArea, 0, 1);
   }
 
-  // Preview image fills the preview area
-  editorPreviewImage.width = "100%";
-  editorPreviewImage.height = "100%";
-  previewArea.addControl(editorPreviewImage);
+  // For tablet/desktop: Use full height, crop sides to show center third of character
+  // Container clips the image to show only the middle portion
+  const previewClipContainer = new Rectangle("previewClip");
+  previewClipContainer.thickness = 0;
+  previewClipContainer.clipChildren = true;
+  previewClipContainer.clipContent = true;
+  previewClipContainer.isHitTestVisible = false;
+
+  if (isMobile) {
+    // Mobile: show full square preview, centered
+    previewClipContainer.width = "90%";
+    previewClipContainer.height = "90%";
+  } else {
+    // Tablet/Desktop: full height, narrow width to crop sides
+    // Show center 40% of the square RTT (cuts 30% from each side)
+    previewClipContainer.height = "90%";
+    previewClipContainer.width = "36%"; // Narrow to show center portion
+  }
+  previewArea.addControl(previewClipContainer);
+
+  // Preview image - stretched to fill container, overflow hidden
+  editorPreviewImage.isHitTestVisible = false; // Don't capture any pointer events
+  if (isMobile) {
+    editorPreviewImage.width = "100%";
+    editorPreviewImage.height = "100%";
+    editorPreviewImage.stretch = Image.STRETCH_UNIFORM;
+  } else {
+    // Make image taller than container so sides get cropped
+    editorPreviewImage.width = "280%"; // Wider than container
+    editorPreviewImage.height = "100%";
+    editorPreviewImage.stretch = Image.STRETCH_UNIFORM;
+  }
+  previewClipContainer.addControl(editorPreviewImage);
 
   function openAppearanceEditor(playerId: string, unitIndex: number, selectionArray: UnitSelection[]): void {
     editingUnit = { playerId, unitIndex, selectionArray };
