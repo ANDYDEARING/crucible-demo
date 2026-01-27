@@ -194,11 +194,8 @@ export function createBattleScene(engine: Engine, canvas: HTMLCanvasElement, loa
     new Vector3(0, 0, 0),
     scene
   );
-  // On touch devices, start with camera controls detached - toggle button will manage it
-  // On desktop, attach controls immediately
-  if (!isTouch) {
-    camera.attachControl(true);
-  }
+  // Camera controls will be attached by updateCameraModeButton() when toggle is initialized
+  // Don't attach here to avoid interfering with GUI clicks before toggle is ready
   camera.lowerBetaLimit = BATTLE_CAMERA_LOWER_BETA_LIMIT;
   camera.upperBetaLimit = BATTLE_CAMERA_UPPER_BETA_LIMIT;
   camera.lowerRadiusLimit = BATTLE_CAMERA_LOWER_RADIUS_LIMIT;
@@ -3709,11 +3706,9 @@ export function createBattleScene(engine: Engine, canvas: HTMLCanvasElement, loa
     canvas.removeEventListener("touchend", handleTouchEnd);
   });
 
-  // Only show on touch devices
-  if (isTouch) {
-    gui.addControl(cameraModeContainer);
-    updateCameraModeButton();
-  }
+  // Show camera mode toggle on all devices (iPad Pro users need it too)
+  gui.addControl(cameraModeContainer);
+  updateCameraModeButton();
 
   // ============================================
   // TURN ORDER PREVIEW (Next Up indicator + modal)
@@ -3792,25 +3787,21 @@ export function createBattleScene(engine: Engine, canvas: HTMLCanvasElement, loa
   turnOrderBtn.isPointerBlocker = true;
   turnOrderBtn.zIndex = 50;
 
-  // Hamburger icon (3 horizontal lines)
-  const hamburgerStack = new StackPanel("hamburgerStack");
-  hamburgerStack.isVertical = true;
-  hamburgerStack.width = "20px";
-  hamburgerStack.height = "16px";
-  hamburgerStack.isHitTestVisible = false;
-  turnOrderBtn.addControl(hamburgerStack);
+  // Hamburger icon (3 horizontal lines) - positioned absolutely for precise control
+  const lineSpacing = 6; // pixels between line centers
+  const lineHeight = 2;
+  const lineWidth = 18;
 
   for (let i = 0; i < 3; i++) {
     const line = new Rectangle(`hamburgerLine${i}`);
-    line.width = "20px";
-    line.height = "2px";
+    line.width = `${lineWidth}px`;
+    line.height = `${lineHeight}px`;
     line.background = "white";
     line.thickness = 0;
     line.isHitTestVisible = false;
-    if (i < 2) {
-      line.paddingBottom = "5px";
-    }
-    hamburgerStack.addControl(line);
+    // Center the 3 lines: offsets are -6, 0, +6 from center
+    line.top = `${(i - 1) * lineSpacing}px`;
+    turnOrderBtn.addControl(line);
   }
 
   gui.addControl(turnOrderBtn);
@@ -4258,6 +4249,9 @@ export function createBattleScene(engine: Engine, canvas: HTMLCanvasElement, loa
   // QUEUED ACTIONS DISPLAY (Bottom Center)
   // ============================================
 
+  // Queue panel sits between cancel (left) and execute (right) buttons
+  // Buttons are 50px wide with 15px margin = 65px, add 10px gap = 75px clear on each side
+  const queuePanelWidth = Math.min(screenWidth - 160, 400); // Leave 80px each side, cap at 400px
   const queuedActionsPanel = new Rectangle("queuedActionsPanel");
   queuedActionsPanel.height = "50px";
   queuedActionsPanel.adaptHeightToChildren = true;
@@ -4267,9 +4261,9 @@ export function createBattleScene(engine: Engine, canvas: HTMLCanvasElement, loa
   queuedActionsPanel.verticalAlignment = Control.VERTICAL_ALIGNMENT_BOTTOM;
   queuedActionsPanel.top = "-15px";
   queuedActionsPanel.thickness = 0;
-  queuedActionsPanel.adaptWidthToChildren = true;
-  queuedActionsPanel.paddingLeft = "15px";
-  queuedActionsPanel.paddingRight = "15px";
+  queuedActionsPanel.width = `${queuePanelWidth}px`;
+  queuedActionsPanel.paddingLeft = "10px";
+  queuedActionsPanel.paddingRight = "10px";
   queuedActionsPanel.isVisible = false;
 
   const queuedActionsStack = new StackPanel("queuedActionsStack");
