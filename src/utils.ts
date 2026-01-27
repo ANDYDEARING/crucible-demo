@@ -5,7 +5,7 @@
  * This eliminates code duplication and provides a single source of truth.
  */
 
-import { Color3 } from "@babylonjs/core";
+import { Color3, Color4 } from "@babylonjs/core";
 
 // =============================================================================
 // COLOR CONVERSION
@@ -26,6 +26,20 @@ export function hexToColor3(hex: string): Color3 {
   const g = parseInt(hex.slice(3, 5), 16) / 255;
   const b = parseInt(hex.slice(5, 7), 16) / 255;
   return new Color3(r, g, b);
+}
+
+/**
+ * Convert a hex color string to a Babylon.js Color4
+ *
+ * @param hex - Hex color string (e.g., "#FF0000" or "#ff0000")
+ * @param alpha - Alpha value (0-1), defaults to 1
+ * @returns Color4 with RGBA values in 0-1 range
+ */
+export function hexToColor4(hex: string, alpha: number = 1): Color4 {
+  const r = parseInt(hex.slice(1, 3), 16) / 255;
+  const g = parseInt(hex.slice(3, 5), 16) / 255;
+  const b = parseInt(hex.slice(5, 7), 16) / 255;
+  return new Color4(r, g, b, alpha);
 }
 
 /**

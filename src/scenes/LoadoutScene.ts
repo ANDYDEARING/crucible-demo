@@ -7,8 +7,6 @@ import {
   HemisphericLight,
   SceneLoader,
   AbstractMesh,
-  Color3,
-  StandardMaterial,
   AnimationGroup,
   PointerEventTypes,
   RenderTargetTexture,
@@ -41,7 +39,7 @@ import {
   EYE_COLORS,
 } from "../config";
 import { MUSIC, AUDIO_VOLUMES, LOOP_BUFFER_TIME, DEBUG_SKIP_OFFSET } from "../config";
-import { createMusicPlayer, hexToColor3 } from "../utils";
+import { createMusicPlayer, hexToColor3, hexToColor4 } from "../utils";
 
 // ============================================
 // COLOR PALETTE (matches title screen aesthetic)
@@ -53,6 +51,7 @@ const COLORS = {
   bgUnitRow: "#1a1714",
   bgButton: "#2a2420",
   bgButtonHover: "#3a3025",
+  bgPreview: "#0a0a0a", // Near-black background for RTT previews
 
   // Borders & dividers
   borderWarm: "#3a2a1a",
@@ -502,9 +501,75 @@ export function createLoadoutScene(
     skinTone: 4,
   };
 
-  // Preview model tracking
-  let previewMesh: AbstractMesh | null = null;
-  let previewAnimations: AnimationGroup[] = [];
+  // RTT-based preview for appearance editor
+  let editorPreviewMesh: AbstractMesh | null = null;
+  let editorPreviewMeshes: AbstractMesh[] = [];
+  let editorPreviewAnimations: AnimationGroup[] = [];
+  let editorLoadedModelKey = "";
+
+  // RTT setup for appearance editor preview
+  const editorRttSize = 512;
+  const editorRtt = new RenderTargetTexture("editorRtt", editorRttSize, scene, false);
+  editorRtt.clearColor = hexToColor4(COLORS.bgPreview); // Dark warm background
+  scene.customRenderTargets.push(editorRtt);
+
+  // Preview camera for editor
+  const editorPreviewCamera = new ArcRotateCamera(
+    "editorPreviewCam",
+    Math.PI / 2 + 0.2,
+    Math.PI / 2.3,
+    2.8,
+    new Vector3(0, 0.95, 0),
+    scene
+  );
+  editorRtt.activeCamera = editorPreviewCamera;
+
+  // Force square aspect ratio
+  const editorOriginalGetEngine = editorPreviewCamera.getEngine.bind(editorPreviewCamera);
+  editorPreviewCamera.getEngine = () => {
+    const eng = editorOriginalGetEngine();
+    return { ...eng, getAspectRatio: () => 1 } as any;
+  };
+
+  // Unique layer mask for editor preview
+  const editorLayerMask = 0x20000000;
+  editorPreviewCamera.layerMask = editorLayerMask;
+
+  // Canvas for RTT pixels
+  const editorCanvas = document.createElement("canvas");
+  editorCanvas.width = editorRttSize;
+  editorCanvas.height = editorRttSize;
+  const editorCtx = editorCanvas.getContext("2d")!;
+
+  // GUI Image for editor preview (will be added to previewArea)
+  const editorPreviewImage = new Image("editorPreviewImg", "");
+  editorPreviewImage.stretch = Image.STRETCH_UNIFORM;
+
+  // Update canvas from RTT
+  let editorFrameCount = 0;
+  editorRtt.onAfterRenderObservable.add(() => {
+    editorFrameCount++;
+    if (editorFrameCount % 3 !== 0) return;
+
+    editorRtt.readPixels()?.then((buffer) => {
+      if (!buffer) return;
+      const pixels = new Uint8Array(buffer.buffer);
+      const imageData = editorCtx.createImageData(editorRttSize, editorRttSize);
+
+      for (let y = 0; y < editorRttSize; y++) {
+        for (let x = 0; x < editorRttSize; x++) {
+          const srcIdx = ((editorRttSize - 1 - y) * editorRttSize + x) * 4;
+          const dstIdx = (y * editorRttSize + x) * 4;
+          imageData.data[dstIdx] = pixels[srcIdx];
+          imageData.data[dstIdx + 1] = pixels[srcIdx + 1];
+          imageData.data[dstIdx + 2] = pixels[srcIdx + 2];
+          imageData.data[dstIdx + 3] = pixels[srcIdx + 3];
+        }
+      }
+      editorCtx.putImageData(imageData, 0, 0);
+      editorPreviewImage.source = editorCanvas.toDataURL();
+    });
+  });
 
   function createAppearanceOption(
     label: string,
@@ -515,14 +580,16 @@ export function createLoadoutScene(
     const container = new StackPanel(`appearance_${label}`);
     container.width = "100%";
     container.isVertical = true;
-    container.paddingTop = "8px";
-    container.paddingBottom = "8px";
+    container.paddingTop = "12px";
+    container.paddingBottom = "12px";
+    container.paddingLeft = isMobile ? "15px" : "25px";
+    container.paddingRight = isMobile ? "15px" : "25px";
 
     const labelText = new TextBlock();
     labelText.text = label.toUpperCase();
     labelText.color = COLORS.textMuted;
     labelText.fontSize = smallFontSize;
-    labelText.height = "20px";
+    labelText.height = "24px";
     labelText.textHorizontalAlignment = Control.HORIZONTAL_ALIGNMENT_LEFT;
     container.addControl(labelText);
 
@@ -560,7 +627,7 @@ export function createLoadoutScene(
           b.background = j === i ? COLORS.selected : COLORS.bgButton;
         });
         onChange(i);
-        updatePreviewModel();
+        updateEditorPreview();
       });
 
       buttons.push(btn);
@@ -580,14 +647,16 @@ export function createLoadoutScene(
     const container = new StackPanel(`appearance_${label}`);
     container.width = "100%";
     container.isVertical = true;
-    container.paddingTop = "8px";
-    container.paddingBottom = "8px";
+    container.paddingTop = "12px";
+    container.paddingBottom = "12px";
+    container.paddingLeft = isMobile ? "15px" : "25px";
+    container.paddingRight = isMobile ? "15px" : "25px";
 
     const labelText = new TextBlock();
     labelText.text = label.toUpperCase();
     labelText.color = COLORS.textMuted;
     labelText.fontSize = smallFontSize;
-    labelText.height = "20px";
+    labelText.height = "24px";
     labelText.textHorizontalAlignment = Control.HORIZONTAL_ALIGNMENT_LEFT;
     container.addControl(labelText);
 
@@ -617,7 +686,7 @@ export function createLoadoutScene(
           s.color = j === i ? COLORS.accentOrange : COLORS.borderWarm;
         });
         onChange(i);
-        updatePreviewModel();
+        updateEditorPreview();
       });
 
       swatches.push(swatch);
@@ -628,25 +697,139 @@ export function createLoadoutScene(
     return container;
   }
 
+  // Update editor preview appearance
+  function updateEditorPreviewAppearance(): void {
+    if (editorPreviewMeshes.length === 0 || !editorPreviewMesh) return;
+
+    const headIndex = editingCustomization.head;
+    const combatStyle = editingCustomization.combatStyle;
+    const isMelee = combatStyle === "melee";
+    const isRightHanded = editingCustomization.handedness === "right";
+
+    // Get team color from editing unit
+    const teamColorHex = editingUnit?.playerId === "player1"
+      ? selections.player1TeamColor
+      : selections.player2TeamColor;
+    const teamColor = hexToColor3(teamColorHex || "#ff0000");
+
+    // Apply handedness by flipping X scale
+    const currentScale = editorPreviewMesh.scaling;
+    editorPreviewMesh.scaling.x = isRightHanded ? -Math.abs(currentScale.x) : Math.abs(currentScale.x);
+
+    editorPreviewMeshes.forEach(m => {
+      if (m.material) {
+        const mat = m.material as PBRMaterial;
+        const matName = mat.name;
+
+        // Apply colors based on material name
+        if (matName === "TeamMain") {
+          mat.albedoColor = teamColor;
+        } else if (matName === "MainSkin") {
+          mat.albedoColor = hexToColor3(SKIN_TONES[editingCustomization.skinTone] || SKIN_TONES[4]);
+        } else if (matName === "MainHair") {
+          mat.albedoColor = hexToColor3(HAIR_COLORS[editingCustomization.hairColor] || HAIR_COLORS[0]);
+        } else if (matName === "MainEye") {
+          mat.albedoColor = hexToColor3(EYE_COLORS[editingCustomization.eyeColor] || EYE_COLORS[2]);
+        }
+      }
+
+      // Hide all heads except selected one
+      for (let i = 0; i < 4; i++) {
+        const headName = `Head_00${i + 1}`;
+        if (m.name.includes(headName)) {
+          m.setEnabled(i === headIndex);
+        }
+      }
+
+      // Show sword or pistol based on combat style
+      const meshNameLower = m.name.toLowerCase();
+      if (meshNameLower.includes("sword")) {
+        m.setEnabled(isMelee);
+      } else if (meshNameLower.includes("pistol")) {
+        m.setEnabled(!isMelee);
+      }
+    });
+
+    // Play correct idle animation
+    editorPreviewAnimations.forEach(ag => ag.stop());
+    const idleAnim = isMelee
+      ? editorPreviewAnimations.find(ag => ag.name === "Idle_Sword")
+      : editorPreviewAnimations.find(ag => ag.name === "Idle_Gun");
+    if (idleAnim) {
+      idleAnim.start(true);
+    }
+  }
+
+  // Load editor preview model
+  function updateEditorPreview(): void {
+    if (!editingUnit) return;
+
+    const unitClass = editingUnit.selectionArray[editingUnit.unitIndex]?.unitClass || "soldier";
+    const classData = getClassData(unitClass);
+    const gender = editingCustomization.body === "male" ? "m" : "f";
+    const modelKey = `${classData.modelFile}_${gender}`;
+
+    // If same model, just update appearance
+    if (modelKey === editorLoadedModelKey && editorPreviewMesh) {
+      updateEditorPreviewAppearance();
+      return;
+    }
+
+    // Clean up existing model
+    if (editorPreviewMesh) {
+      if (editorRtt.renderList) {
+        editorRtt.renderList.length = 0;
+      }
+      editorPreviewMesh.dispose();
+      editorPreviewMesh = null;
+      editorPreviewMeshes = [];
+    }
+    editorPreviewAnimations.forEach(a => a.stop());
+    editorPreviewAnimations = [];
+
+    const modelPath = `/models/${modelKey}.glb`;
+    editorLoadedModelKey = modelKey;
+
+    SceneLoader.ImportMeshAsync("", modelPath, "", scene).then((result) => {
+      editorPreviewMesh = result.meshes[0];
+      editorPreviewMeshes = result.meshes;
+      editorPreviewMesh.position = new Vector3(0, 0, 0);
+      editorPreviewMesh.scaling = new Vector3(1, 1, 1);
+      editorPreviewMesh.rotation = new Vector3(0, Math.PI * 0.1, 0);
+
+      // Set layer mask and add to RTT render list
+      result.meshes.forEach(m => {
+        m.layerMask = editorLayerMask;
+        editorRtt.renderList?.push(m);
+      });
+
+      // Store animations and update appearance
+      editorPreviewAnimations = result.animationGroups;
+      updateEditorPreviewAppearance();
+    }).catch((err) => {
+      console.warn("Failed to load editor preview:", err);
+    });
+  }
+
   // Appearance overlay
   const appearanceOverlay = new Rectangle("appearanceOverlay");
   appearanceOverlay.width = "100%";
   appearanceOverlay.height = "100%";
-  appearanceOverlay.background = COLORS.bgDeep + "f8";
+  appearanceOverlay.background = COLORS.bgDeep;
   appearanceOverlay.thickness = 0;
   appearanceOverlay.isVisible = false;
   appearanceOverlay.zIndex = 500;
   gui.addControl(appearanceOverlay);
 
-  // Layout: options on left/bottom, preview on right/top (responsive)
+  // Layout: options on left, preview on right (50/50 with padding)
   const overlayGrid = new Grid("overlayGrid");
   overlayGrid.width = "100%";
   overlayGrid.height = "100%";
 
   if (isMobile) {
     overlayGrid.addColumnDefinition(1);
-    overlayGrid.addRowDefinition(0.35); // Preview
-    overlayGrid.addRowDefinition(0.65); // Options
+    overlayGrid.addRowDefinition(0.45); // Preview
+    overlayGrid.addRowDefinition(0.55); // Options
   } else {
     overlayGrid.addColumnDefinition(0.5); // Options
     overlayGrid.addColumnDefinition(0.5); // Preview
@@ -654,13 +837,13 @@ export function createLoadoutScene(
   }
   appearanceOverlay.addControl(overlayGrid);
 
-  // Options panel
+  // Options panel with drag-to-scroll
   const optionsPanel = new ScrollViewer("optionsScroll");
   optionsPanel.width = "100%";
   optionsPanel.height = "100%";
   optionsPanel.thickness = 0;
-  optionsPanel.barSize = 6;
-  optionsPanel.barColor = COLORS.borderWarm;
+  optionsPanel.barSize = 0; // Hide scrollbar for cleaner look
+  optionsPanel.barColor = "transparent";
   if (isMobile) {
     overlayGrid.addControl(optionsPanel, 1, 0);
   } else {
@@ -668,21 +851,59 @@ export function createLoadoutScene(
   }
 
   const optionsStack = new StackPanel("optionsStack");
-  optionsStack.width = "90%";
+  optionsStack.width = isMobile ? "90%" : "85%";
   optionsStack.isVertical = true;
-  optionsStack.paddingTop = "15px";
-  optionsStack.paddingBottom = "20px";
+  optionsStack.paddingTop = isMobile ? "15px" : "40px";
+  optionsStack.paddingBottom = "30px";
   optionsPanel.addControl(optionsStack);
 
+  // Drag-to-scroll for options panel
+  let editorDragging = false;
+  let editorLastPointerY = 0;
+
+  appearanceOverlay.onPointerDownObservable.add((info) => {
+    editorDragging = true;
+    editorLastPointerY = info.y;
+  });
+
+  appearanceOverlay.onPointerUpObservable.add(() => {
+    editorDragging = false;
+  });
+
+  appearanceOverlay.onPointerMoveObservable.add((info) => {
+    if (!editorDragging) return;
+
+    const deltaY = editorLastPointerY - info.y;
+    editorLastPointerY = info.y;
+
+    const contentHeight = optionsStack.heightInPixels;
+    const viewportHeight = optionsPanel.heightInPixels;
+    const maxScroll = contentHeight - viewportHeight;
+
+    if (maxScroll > 0) {
+      const scrollDelta = deltaY / maxScroll;
+      const newScroll = Math.max(0, Math.min(1, optionsPanel.verticalBar.value + scrollDelta));
+      optionsPanel.verticalBar.value = newScroll;
+    }
+  });
+
   // Title
+  const titleContainer = new Rectangle("titleContainer");
+  titleContainer.width = "100%";
+  titleContainer.height = "50px";
+  titleContainer.thickness = 0;
+  titleContainer.paddingLeft = isMobile ? "15px" : "25px";
+  titleContainer.paddingRight = isMobile ? "15px" : "25px";
+  optionsStack.addControl(titleContainer);
+
   const overlayTitle = new TextBlock("overlayTitle");
   overlayTitle.text = "EDIT APPEARANCE";
   overlayTitle.color = COLORS.textPrimary;
   overlayTitle.fontSize = headerFontSize;
   overlayTitle.fontFamily = "'Bebas Neue', sans-serif";
-  overlayTitle.height = "40px";
   overlayTitle.textHorizontalAlignment = Control.HORIZONTAL_ALIGNMENT_LEFT;
-  optionsStack.addControl(overlayTitle);
+  overlayTitle.textVerticalAlignment = Control.VERTICAL_ALIGNMENT_CENTER;
+  titleContainer.addControl(overlayTitle);
 
   // Options
   const bodySelector = createAppearanceOption("Body", ["Male", "Female"], 0, (idx) => {
@@ -716,11 +937,14 @@ export function createLoadoutScene(
   optionsStack.addControl(eyeSelector);
 
   // Button row
-  const buttonRow = new StackPanel("buttonRow");
-  buttonRow.isVertical = false;
-  buttonRow.height = `${buttonHeight + 20}px`;
-  buttonRow.paddingTop = "15px";
-  optionsStack.addControl(buttonRow);
+  const editorButtonRow = new StackPanel("editorButtonRow");
+  editorButtonRow.isVertical = false;
+  editorButtonRow.height = `${buttonHeight + 30}px`;
+  editorButtonRow.paddingTop = "20px";
+  editorButtonRow.paddingLeft = isMobile ? "15px" : "25px";
+  editorButtonRow.paddingRight = isMobile ? "15px" : "25px";
+  editorButtonRow.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_LEFT;
+  optionsStack.addControl(editorButtonRow);
 
   const saveBtn = Button.CreateSimpleButton("saveAppearance", "S A V E");
   saveBtn.width = isMobile ? "120px" : "140px";
@@ -741,14 +965,14 @@ export function createLoadoutScene(
     }
     closeAppearanceEditor();
   });
-  buttonRow.addControl(saveBtn);
+  editorButtonRow.addControl(saveBtn);
 
   // Spacer
-  const btnSpacer = new Rectangle();
-  btnSpacer.width = "15px";
-  btnSpacer.height = "1px";
-  btnSpacer.thickness = 0;
-  buttonRow.addControl(btnSpacer);
+  const editorBtnSpacer = new Rectangle();
+  editorBtnSpacer.width = "15px";
+  editorBtnSpacer.height = "1px";
+  editorBtnSpacer.thickness = 0;
+  editorButtonRow.addControl(editorBtnSpacer);
 
   const cancelBtn = Button.CreateSimpleButton("cancelAppearance", "C A N C E L");
   cancelBtn.width = isMobile ? "100px" : "120px";
@@ -763,69 +987,28 @@ export function createLoadoutScene(
   cancelBtn.onPointerClickObservable.add(() => {
     closeAppearanceEditor();
   });
-  buttonRow.addControl(cancelBtn);
+  editorButtonRow.addControl(cancelBtn);
 
-  // Preview area (shows on tablet/desktop, or top on mobile)
+  // Preview area (right side on desktop, top on mobile)
   const previewArea = new Rectangle("previewArea");
   previewArea.width = "100%";
   previewArea.height = "100%";
   previewArea.thickness = 0;
-  previewArea.background = "transparent";
+  previewArea.background = COLORS.bgPreview;
+  previewArea.paddingTop = isMobile ? "10px" : "40px";
+  previewArea.paddingBottom = isMobile ? "10px" : "40px";
+  previewArea.paddingLeft = isMobile ? "20px" : "20px";
+  previewArea.paddingRight = isMobile ? "20px" : "40px";
   if (isMobile) {
     overlayGrid.addControl(previewArea, 0, 0);
   } else {
     overlayGrid.addControl(previewArea, 0, 1);
   }
 
-  const previewLabel = new TextBlock("previewLabel");
-  previewLabel.text = "PREVIEW";
-  previewLabel.color = COLORS.textMuted;
-  previewLabel.fontSize = smallFontSize;
-  previewLabel.verticalAlignment = Control.VERTICAL_ALIGNMENT_TOP;
-  previewLabel.top = "10px";
-  previewArea.addControl(previewLabel);
-
-  function updatePreviewModel(): void {
-    // Clean up existing preview
-    if (previewMesh) {
-      previewMesh.dispose();
-      previewMesh = null;
-    }
-    previewAnimations.forEach(a => a.stop());
-    previewAnimations = [];
-
-    if (!editingUnit) return;
-
-    const unitClass = editingUnit.selectionArray[editingUnit.unitIndex]?.unitClass || "soldier";
-    const classData = getClassData(unitClass);
-    // Construct model path from modelFile base name and body type (m/f suffix)
-    const gender = editingCustomization.body === "male" ? "m" : "f";
-    const modelPath = `/models/${classData.modelFile}_${gender}.glb`;
-
-    SceneLoader.ImportMeshAsync("", modelPath, "", scene).then((result) => {
-      previewMesh = result.meshes[0];
-      previewMesh.position = new Vector3(0, 0, 0);
-      previewMesh.scaling = new Vector3(1, 1, 1);
-
-      // Apply skin tone
-      const skinMat = new StandardMaterial("previewSkin", scene);
-      skinMat.diffuseColor = Color3.FromHexString(SKIN_TONES[editingCustomization.skinTone]);
-      result.meshes.forEach((mesh) => {
-        if (mesh.name.toLowerCase().includes("skin") || mesh.name.toLowerCase().includes("body")) {
-          mesh.material = skinMat;
-        }
-      });
-
-      // Play idle animation
-      previewAnimations = result.animationGroups;
-      const idle = previewAnimations.find(a => a.name.toLowerCase().includes("idle"));
-      if (idle) {
-        idle.start(true);
-      }
-    }).catch((err) => {
-      console.warn("Failed to load preview model:", err);
-    });
-  }
+  // Preview image fills the preview area
+  editorPreviewImage.width = "100%";
+  editorPreviewImage.height = "100%";
+  previewArea.addControl(editorPreviewImage);
 
   function openAppearanceEditor(playerId: string, unitIndex: number, selectionArray: UnitSelection[]): void {
     editingUnit = { playerId, unitIndex, selectionArray };
@@ -894,19 +1077,30 @@ export function createLoadoutScene(
     overlayTitle.text = `${UNIT_DESIGNATIONS[unitIndex]} - EDIT APPEARANCE`;
     appearanceOverlay.isVisible = true;
 
+    // Reset scroll position
+    optionsPanel.verticalBar.value = 0;
+
     // Load preview model
-    updatePreviewModel();
+    editorLoadedModelKey = ""; // Force reload
+    updateEditorPreview();
   }
 
   function closeAppearanceEditor(): void {
     appearanceOverlay.isVisible = false;
     editingUnit = null;
-    if (previewMesh) {
-      previewMesh.dispose();
-      previewMesh = null;
+
+    // Clean up editor preview model
+    if (editorPreviewMesh) {
+      if (editorRtt.renderList) {
+        editorRtt.renderList.length = 0;
+      }
+      editorPreviewMesh.dispose();
+      editorPreviewMesh = null;
+      editorPreviewMeshes = [];
     }
-    previewAnimations.forEach(a => a.stop());
-    previewAnimations = [];
+    editorPreviewAnimations.forEach(a => a.stop());
+    editorPreviewAnimations = [];
+    editorLoadedModelKey = "";
   }
 
   // ============================================
@@ -1214,14 +1408,14 @@ export function createLoadoutScene(
       mobilePreviewContainer.width = "140px";
       mobilePreviewContainer.height = "140px";
       mobilePreviewContainer.thickness = 0;
-      mobilePreviewContainer.background = COLORS.bgButton;
+      mobilePreviewContainer.background = COLORS.bgPreview;
       mobilePreviewContainer.cornerRadius = 8;
       tooltipStack.addControl(mobilePreviewContainer);
 
       // RTT setup for mobile preview
       const mobileRttSize = 256;
       const mobileRtt = new RenderTargetTexture(`mobileRtt_${playerId}_${unitIndex}`, mobileRttSize, scene, false);
-      mobileRtt.clearColor = new Color4(0.1, 0.08, 0.06, 1);
+      mobileRtt.clearColor = hexToColor4(COLORS.bgPreview); // Dark warm background
       scene.customRenderTargets.push(mobileRtt);
 
       // Preview camera for mobile
@@ -1287,21 +1481,36 @@ export function createLoadoutScene(
 
       // Update mobile preview appearance
       const updateMobilePreviewAppearance = (): void => {
-        if (mobilePreviewMeshes.length === 0) return;
+        if (mobilePreviewMeshes.length === 0 || !mobilePreviewMesh) return;
 
         const customization = selectionArray[unitIndex]?.customization;
         const headIndex = customization?.head ?? 0;
         const isMelee = selectedStyle === "melee";
+        const isRightHanded = customization?.handedness === "right";
 
         const teamColorHex = playerId === "player1"
           ? selections.player1TeamColor
           : selections.player2TeamColor;
         const teamColor = hexToColor3(teamColorHex || "#ff0000");
 
+        // Apply handedness by flipping X scale
+        const currentScale = mobilePreviewMesh.scaling;
+        mobilePreviewMesh.scaling.x = isRightHanded ? -Math.abs(currentScale.x) : Math.abs(currentScale.x);
+
         mobilePreviewMeshes.forEach(m => {
-          if (m.material && m.material.name === "TeamMain") {
+          if (m.material) {
             const mat = m.material as PBRMaterial;
-            mat.albedoColor = teamColor;
+            const matName = mat.name;
+
+            if (matName === "TeamMain") {
+              mat.albedoColor = teamColor;
+            } else if (matName === "MainSkin") {
+              mat.albedoColor = hexToColor3(SKIN_TONES[customization?.skinTone ?? 4] || SKIN_TONES[4]);
+            } else if (matName === "MainHair") {
+              mat.albedoColor = hexToColor3(HAIR_COLORS[customization?.hairColor ?? 0] || HAIR_COLORS[0]);
+            } else if (matName === "MainEye") {
+              mat.albedoColor = hexToColor3(EYE_COLORS[customization?.eyeColor ?? 2] || EYE_COLORS[2]);
+            }
           }
 
           for (let i = 0; i < 4; i++) {
@@ -1447,14 +1656,14 @@ export function createLoadoutScene(
       previewContainer.width = "100%";
       previewContainer.height = "100%";
       previewContainer.thickness = 0;
-      previewContainer.background = COLORS.bgButton;
+      previewContainer.background = COLORS.bgPreview;
       previewContainer.cornerRadius = 6;
       mainGrid.addControl(previewContainer, 0, 3);
 
       // RTT setup for this unit's preview
       const rttSize = 256;
       const rtt = new RenderTargetTexture(`rtt_${playerId}_${unitIndex}`, rttSize, scene, false);
-      rtt.clearColor = new Color4(0.1, 0.08, 0.06, 1); // Dark warm background
+      rtt.clearColor = hexToColor4(COLORS.bgPreview); // Dark warm background
       scene.customRenderTargets.push(rtt);
 
       // Preview camera for this unit
@@ -1527,11 +1736,12 @@ export function createLoadoutScene(
 
       // Update preview appearance without reloading model
       const updatePreviewAppearance = (): void => {
-        if (unitPreviewMeshes.length === 0) return;
+        if (unitPreviewMeshes.length === 0 || !unitPreviewMesh) return;
 
         const customization = selectionArray[unitIndex]?.customization;
         const headIndex = customization?.head ?? 0;
         const isMelee = selectedStyle === "melee";
+        const isRightHanded = customization?.handedness === "right";
 
         // Get team color
         const teamColorHex = playerId === "player1"
@@ -1539,11 +1749,25 @@ export function createLoadoutScene(
           : selections.player2TeamColor;
         const teamColor = hexToColor3(teamColorHex || "#ff0000");
 
+        // Apply handedness by flipping X scale
+        const currentScale = unitPreviewMesh.scaling;
+        unitPreviewMesh.scaling.x = isRightHanded ? -Math.abs(currentScale.x) : Math.abs(currentScale.x);
+
         unitPreviewMeshes.forEach(m => {
-          // Apply team color to TeamMain material
-          if (m.material && m.material.name === "TeamMain") {
+          // Apply colors to materials
+          if (m.material) {
             const mat = m.material as PBRMaterial;
-            mat.albedoColor = teamColor;
+            const matName = mat.name;
+
+            if (matName === "TeamMain") {
+              mat.albedoColor = teamColor;
+            } else if (matName === "MainSkin") {
+              mat.albedoColor = hexToColor3(SKIN_TONES[customization?.skinTone ?? 4] || SKIN_TONES[4]);
+            } else if (matName === "MainHair") {
+              mat.albedoColor = hexToColor3(HAIR_COLORS[customization?.hairColor ?? 0] || HAIR_COLORS[0]);
+            } else if (matName === "MainEye") {
+              mat.albedoColor = hexToColor3(EYE_COLORS[customization?.eyeColor ?? 2] || EYE_COLORS[2]);
+            }
           }
 
           // Hide all heads except selected one (Head_001 through Head_004)
