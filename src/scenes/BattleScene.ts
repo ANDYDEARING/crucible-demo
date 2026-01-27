@@ -3697,7 +3697,7 @@ export function createBattleScene(engine: Engine, canvas: HTMLCanvasElement, loa
   nextUpBtn.color = "#555555";
 
   const nextUpText = new TextBlock("nextUpText");
-  nextUpText.text = "Next: ...";
+  nextUpText.text = "Next Up: ...";
   nextUpText.fontSize = isTouch ? 12 : 14;
   nextUpText.color = "#888888";
   nextUpBtn.addControl(nextUpText);
@@ -3762,22 +3762,27 @@ export function createBattleScene(engine: Engine, canvas: HTMLCanvasElement, loa
     // Find the next unit that isn't the current one
     const next = predicted.find(u => u !== currentUnit);
 
+    // Build display text
+    let displayText = "--";
+    let displayColor = "#888888";
+    let borderColor = "#555555";
+
     if (next) {
       const designation = UNIT_DESIGNATIONS[next.loadoutIndex] || "?";
       const className = getClassData(next.unitClass).name;
-      nextUpText.text = `Next: ${designation} ${className}`;
+      displayText = `${designation} ${className}`;
 
       // Color by team
       const r = Math.round(next.teamColor.r * 255).toString(16).padStart(2, '0');
       const g = Math.round(next.teamColor.g * 255).toString(16).padStart(2, '0');
       const b = Math.round(next.teamColor.b * 255).toString(16).padStart(2, '0');
-      nextUpText.color = `#${r}${g}${b}`;
-      nextUpBtn.color = `#${r}${g}${b}`;
-    } else {
-      nextUpText.text = "Next: --";
-      nextUpText.color = "#888888";
-      nextUpBtn.color = "#555555";
+      displayColor = `#${r}${g}${b}`;
+      borderColor = displayColor;
     }
+
+    nextUpText.text = `Next Up: ${displayText}`;
+    nextUpText.color = displayColor;
+    nextUpBtn.color = borderColor;
   }
 
   function showTurnOrderModal(): void {
