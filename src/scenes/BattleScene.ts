@@ -15,7 +15,7 @@ import {
   PBRMaterial,
 } from "@babylonjs/core";
 import "@babylonjs/loaders/glTF";
-import { AdvancedDynamicTexture, TextBlock, Button, Rectangle, StackPanel, Grid, Control } from "@babylonjs/gui";
+import { AdvancedDynamicTexture, TextBlock, Button, Rectangle, StackPanel, Grid, Control, ScrollViewer } from "@babylonjs/gui";
 import {
   type Loadout,
   type UnitSelection,
@@ -125,6 +125,13 @@ import {
 
 // Greek letters for unit designations (matches LoadoutScene)
 const UNIT_DESIGNATIONS = ["Δ", "Ψ", "Ω"]; // Delta, Psi, Omega
+
+// Boost info for turn order display
+const BOOST_INFO = [
+  { name: "Tough", stat: "HP" },
+  { name: "Deadly", stat: "Damage" },
+  { name: "Quick", stat: "Speed" },
+];
 
 export function createBattleScene(engine: Engine, canvas: HTMLCanvasElement, loadout: Loadout | null): Scene {
   const scene = new Scene(engine);
@@ -1332,7 +1339,8 @@ export function createBattleScene(engine: Engine, canvas: HTMLCanvasElement, loa
         gui,
         i,
         player1TeamColor,
-        selection.customization
+        selection.customization,
+        selection.boost
       );
       units.push(unit);
     }
@@ -1352,7 +1360,8 @@ export function createBattleScene(engine: Engine, canvas: HTMLCanvasElement, loa
         gui,
         i,
         player2TeamColor,
-        selection.customization
+        selection.customization,
+        selection.boost
       );
       units.push(unit);
     }
@@ -3613,6 +3622,275 @@ export function createBattleScene(engine: Engine, canvas: HTMLCanvasElement, loa
   }
 
   // ============================================
+  // TURN ORDER PREVIEW (Next Up indicator + modal)
+  // ============================================
+
+  // Function to predict turn order without modifying actual state
+  function predictTurnOrder(count: number): Unit[] {
+    const result: Unit[] = [];
+    const aliveUnits = units.filter(u => u.hp > 0);
+    if (aliveUnits.length === 0) return result;
+
+    // During first round, use the queue
+    if (isFirstRound && firstRoundQueue.length > 0) {
+      // Return remaining units in first round queue
+      for (let i = 0; i < Math.min(count, firstRoundQueue.length); i++) {
+        if (firstRoundQueue[i].hp > 0) {
+          result.push(firstRoundQueue[i]);
+        }
+      }
+      return result;
+    }
+
+    // Clone accumulators for simulation
+    const simAccumulators = new Map<Unit, number>();
+    for (const unit of aliveUnits) {
+      simAccumulators.set(unit, unit.accumulator);
+    }
+
+    // Track simulated "last acting team" for tie-breaking
+    let simLastTeam: Team | null = lastActingTeam;
+
+    for (let i = 0; i < count && aliveUnits.length > 0; i++) {
+      const readyUnits: Unit[] = [];
+
+      // Tick until someone is ready
+      while (readyUnits.length === 0) {
+        for (const unit of aliveUnits) {
+          const acc = (simAccumulators.get(unit) || 0) + getEffectiveSpeed(unit);
+          simAccumulators.set(unit, acc);
+          if (acc >= ACCUMULATOR_THRESHOLD) {
+            readyUnits.push(unit);
+          }
+        }
+      }
+
+      // Sort by tie-breakers
+      readyUnits.sort((a, b) => {
+        if (simLastTeam !== null) {
+          if (a.team !== simLastTeam && b.team === simLastTeam) return -1;
+          if (b.team !== simLastTeam && a.team === simLastTeam) return 1;
+        }
+        return a.loadoutIndex - b.loadoutIndex;
+      });
+
+      const nextUnit = readyUnits[0];
+      result.push(nextUnit);
+      simAccumulators.set(nextUnit, 0); // Reset after acting
+      simLastTeam = nextUnit.team;
+    }
+
+    return result;
+  }
+
+  // "Next Up" button in top left
+  const nextUpBtn = Button.CreateSimpleButton("nextUpBtn", "");
+  nextUpBtn.width = isTouch ? "140px" : "160px";
+  nextUpBtn.height = "36px";
+  nextUpBtn.background = "rgba(20, 20, 30, 0.8)";
+  nextUpBtn.cornerRadius = 8;
+  nextUpBtn.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_LEFT;
+  nextUpBtn.verticalAlignment = Control.VERTICAL_ALIGNMENT_TOP;
+  nextUpBtn.left = "15px";
+  nextUpBtn.top = "15px";
+  nextUpBtn.thickness = 1;
+  nextUpBtn.color = "#555555";
+
+  const nextUpText = new TextBlock("nextUpText");
+  nextUpText.text = "Next: ...";
+  nextUpText.fontSize = isTouch ? 12 : 14;
+  nextUpText.color = "#888888";
+  nextUpBtn.addControl(nextUpText);
+  gui.addControl(nextUpBtn);
+
+  // Turn order modal
+  const turnOrderBackdrop = new Rectangle("turnOrderBackdrop");
+  turnOrderBackdrop.width = "100%";
+  turnOrderBackdrop.height = "100%";
+  turnOrderBackdrop.background = "rgba(0, 0, 0, 0.7)";
+  turnOrderBackdrop.thickness = 0;
+  turnOrderBackdrop.isVisible = false;
+  turnOrderBackdrop.zIndex = 100;
+  gui.addControl(turnOrderBackdrop);
+
+  const turnOrderModal = new Rectangle("turnOrderModal");
+  turnOrderModal.width = isTouch ? "280px" : "320px";
+  turnOrderModal.height = "400px";
+  turnOrderModal.background = "#0a0a0a";
+  turnOrderModal.cornerRadius = 12;
+  turnOrderModal.thickness = 2;
+  turnOrderModal.color = "#333333";
+  turnOrderModal.isVisible = false;
+  turnOrderModal.zIndex = 101;
+  gui.addControl(turnOrderModal);
+
+  // Modal header
+  const modalHeader = new Rectangle("modalHeader");
+  modalHeader.width = "100%";
+  modalHeader.height = "50px";
+  modalHeader.background = "#151515";
+  modalHeader.thickness = 0;
+  modalHeader.verticalAlignment = Control.VERTICAL_ALIGNMENT_TOP;
+  turnOrderModal.addControl(modalHeader);
+
+  const modalTitle = new TextBlock("modalTitle");
+  modalTitle.text = "Turn Order";
+  modalTitle.color = "#ffffff";
+  modalTitle.fontSize = 18;
+  modalTitle.fontWeight = "bold";
+  modalHeader.addControl(modalTitle);
+
+  // Scrollable turn order list (drag to scroll, no visible scrollbar)
+  const turnOrderScroll = new ScrollViewer("turnOrderScroll");
+  turnOrderScroll.width = "100%";
+  turnOrderScroll.height = "340px";
+  turnOrderScroll.top = "50px";
+  turnOrderScroll.verticalAlignment = Control.VERTICAL_ALIGNMENT_TOP;
+  turnOrderScroll.thickness = 0;
+  turnOrderScroll.barSize = 0;
+  turnOrderScroll.barColor = "transparent";
+  turnOrderModal.addControl(turnOrderScroll);
+
+  const turnOrderStack = new StackPanel("turnOrderStack");
+  turnOrderStack.width = "100%";
+  turnOrderStack.paddingTop = "10px";
+  turnOrderScroll.addControl(turnOrderStack);
+
+  function updateNextUpIndicator(): void {
+    const predicted = predictTurnOrder(2); // Get at least 2 to skip current if needed
+
+    // Find the next unit that isn't the current one
+    const next = predicted.find(u => u !== currentUnit);
+
+    if (next) {
+      const designation = UNIT_DESIGNATIONS[next.loadoutIndex] || "?";
+      const className = getClassData(next.unitClass).name;
+      nextUpText.text = `Next: ${designation} ${className}`;
+
+      // Color by team
+      const r = Math.round(next.teamColor.r * 255).toString(16).padStart(2, '0');
+      const g = Math.round(next.teamColor.g * 255).toString(16).padStart(2, '0');
+      const b = Math.round(next.teamColor.b * 255).toString(16).padStart(2, '0');
+      nextUpText.color = `#${r}${g}${b}`;
+      nextUpBtn.color = `#${r}${g}${b}`;
+    } else {
+      nextUpText.text = "Next: --";
+      nextUpText.color = "#888888";
+      nextUpBtn.color = "#555555";
+    }
+  }
+
+  function showTurnOrderModal(): void {
+    // Populate turn order list
+    turnOrderStack.clearControls();
+
+    // Show current unit first
+    if (currentUnit) {
+      const currentRow = createTurnOrderRow(currentUnit, 0, true);
+      turnOrderStack.addControl(currentRow);
+    }
+
+    // Predict next several turns
+    const predicted = predictTurnOrder(12); // Show up to 12 upcoming turns
+    for (let i = 0; i < predicted.length; i++) {
+      const row = createTurnOrderRow(predicted[i], i + 1, false);
+      turnOrderStack.addControl(row);
+    }
+
+    turnOrderBackdrop.isVisible = true;
+    turnOrderModal.isVisible = true;
+  }
+
+  function hideTurnOrderModal(): void {
+    turnOrderBackdrop.isVisible = false;
+    turnOrderModal.isVisible = false;
+  }
+
+  function createTurnOrderRow(unit: Unit, index: number, isCurrent: boolean): Rectangle {
+    const row = new Rectangle(`turnOrderRow${index}`);
+    row.width = "100%";
+    row.height = "58px";
+    row.background = isCurrent ? "rgba(255, 200, 100, 0.15)" : "transparent";
+    row.thickness = 0;
+    row.paddingBottom = "4px";
+
+    // Team color indicator
+    const colorBar = new Rectangle(`colorBar${index}`);
+    colorBar.width = "4px";
+    colorBar.height = "50px";
+    const r = Math.round(unit.teamColor.r * 255).toString(16).padStart(2, '0');
+    const g = Math.round(unit.teamColor.g * 255).toString(16).padStart(2, '0');
+    const b = Math.round(unit.teamColor.b * 255).toString(16).padStart(2, '0');
+    const teamColorHex = `#${r}${g}${b}`;
+    colorBar.background = teamColorHex;
+    colorBar.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_LEFT;
+    colorBar.left = "5px";
+    colorBar.thickness = 0;
+    row.addControl(colorBar);
+
+    // Unit name - team colored
+    const designation = UNIT_DESIGNATIONS[unit.loadoutIndex] || "?";
+    const className = getClassData(unit.unitClass).name;
+
+    const nameText = new TextBlock(`nameText${index}`);
+    nameText.text = `${designation} ${className}`;
+    nameText.color = teamColorHex;
+    nameText.fontSize = 14;
+    nameText.fontWeight = isCurrent ? "bold" : "normal";
+    nameText.textHorizontalAlignment = Control.HORIZONTAL_ALIGNMENT_LEFT;
+    nameText.left = "20px";
+    nameText.top = "-14px";
+    row.addControl(nameText);
+
+    // Speed text
+    const speed = getEffectiveSpeed(unit).toFixed(1);
+    const speedText = new TextBlock(`speedText${index}`);
+    speedText.text = `Speed: ${speed}`;
+    speedText.color = "#888888";
+    speedText.fontSize = 11;
+    speedText.textHorizontalAlignment = Control.HORIZONTAL_ALIGNMENT_LEFT;
+    speedText.left = "20px";
+    speedText.top = "2px";
+    row.addControl(speedText);
+
+    // Weapon + Boost text
+    const weaponType = unit.customization?.combatStyle === "melee" ? "Melee" : "Ranged";
+    const boostData = BOOST_INFO[unit.boost] || BOOST_INFO[0];
+    const boostText = new TextBlock(`boostText${index}`);
+    boostText.text = `${weaponType}, +25% ${boostData.stat}`;
+    boostText.color = "#888888";
+    boostText.fontSize = 11;
+    boostText.textHorizontalAlignment = Control.HORIZONTAL_ALIGNMENT_LEFT;
+    boostText.left = "20px";
+    boostText.top = "16px";
+    row.addControl(boostText);
+
+    // Current indicator
+    if (isCurrent) {
+      const currentLabel = new TextBlock(`currentLabel${index}`);
+      currentLabel.text = "NOW";
+      currentLabel.color = "#ffcc66";
+      currentLabel.fontSize = 10;
+      currentLabel.fontWeight = "bold";
+      currentLabel.textHorizontalAlignment = Control.HORIZONTAL_ALIGNMENT_RIGHT;
+      currentLabel.left = "-10px";
+      row.addControl(currentLabel);
+    }
+
+    return row;
+  }
+
+  // Event handlers
+  nextUpBtn.onPointerClickObservable.add(() => {
+    showTurnOrderModal();
+  });
+
+  // Click backdrop to close modal
+  turnOrderBackdrop.onPointerClickObservable.add(() => {
+    hideTurnOrderModal();
+  });
+
+  // ============================================
   // COMMAND MENU UI
   // ============================================
 
@@ -3922,7 +4200,10 @@ export function createBattleScene(engine: Engine, canvas: HTMLCanvasElement, loa
   }
 
   // Register menu update callback
-  onTurnStartCallback = () => updateCommandMenu();
+  onTurnStartCallback = () => {
+    updateCommandMenu();
+    updateNextUpIndicator();
+  };
 
   // Game is initialized when spawnAllUnits completes (calls startGame)
 
@@ -3953,7 +4234,8 @@ async function createUnit(
   gui: AdvancedDynamicTexture,
   loadoutIndex: number,
   teamColor: Color3,
-  customization?: UnitCustomization
+  customization?: UnitCustomization,
+  boost?: number
 ): Promise<Unit> {
   const classData = getClassData(unitClass);
 
@@ -4090,6 +4372,7 @@ async function createUnit(
     speedBonus: 0,
     accumulator: 0,
     loadoutIndex,
+    boost: boost ?? 0,
     modelRoot,
     modelMeshes,
     animationGroups,

@@ -224,6 +224,7 @@ export interface Unit {
   speedBonus: number;   // Bonus from skipping, consumed after next turn
   accumulator: number;  // Builds up until >= threshold, then unit acts
   loadoutIndex: number; // Original position in loadout for tie-breaking
+  boost: number;        // Boost index (0=HP, 1=Damage, 2=Speed)
 
   // Facing system
   facing: FacingConfig;
